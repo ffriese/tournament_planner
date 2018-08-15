@@ -6,7 +6,7 @@ from PyQt5.QtGui import QIcon
 class App(QWidget):
     def __init__(self):
         super().__init__()
-        self.title = 'PyQt5 simple window'
+        self.title = 'FlunkRock Planner'
         self.left = 10
         self.top = 10
         self.width = 640
@@ -15,6 +15,8 @@ class App(QWidget):
 
     def initUI(self):
         self.setWindowTitle(self.title)
+        self.setWindowIcon(QIcon('favicon.ico'))
+        self.setStyleSheet('background-color: rgb(180,0,180)')
         self.setGeometry(self.left, self.top, self.width, self.height)
         self.show()
 
