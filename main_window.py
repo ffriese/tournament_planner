@@ -5,7 +5,7 @@ from PyQt5.QtSql import QSqlQuery
 
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle
 from PyQt5.QtGui import QIcon
-from tournament_wizard import TournamentWizard
+from wizards import TournamentWizard
 
 
 class App(QWidget):
@@ -18,10 +18,10 @@ class App(QWidget):
         self.height = 480
         self.tournament_wizard = None
         self.layout = None
-        data = self.connect_to_database()
-        self.init_ui(data)
+        self.data = self.connect_to_database()
+        self.init_ui()
 
-    def init_ui(self, data):
+    def init_ui(self):
         self.setWindowTitle(self.title)
         self.setWindowIcon(QIcon('favicon.ico'))
         self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold;')
@@ -37,7 +37,7 @@ class App(QWidget):
         create_tournament_button.clicked.connect(self.show_tournament_wizard)
         r = 0
         c = 0
-        for t in data['tournaments']:
+        for t in self.data['tournaments']:
             bt = QPushButton(t['name'])
             bt.setStyleSheet(t['stylesheet'])
             bt.setIcon(QIcon('favicon.ico'))
@@ -55,7 +55,7 @@ class App(QWidget):
 
     def show_tournament_wizard(self):
         if not self.tournament_wizard:
-            self.tournament_wizard = TournamentWizard()
+            self.tournament_wizard = TournamentWizard(self.data['teams'])
 
         def cleanup():
             self.tournament_wizard = None
@@ -97,9 +97,9 @@ class App(QWidget):
             # insert dummy tournaments, todo: remove, obviously
             query.prepare('INSERT INTO tournaments(name, stylesheet) VALUES (:tournament_name, :style_sheet)')
             tournaments = [
-                            ('Flunkyrock 2015', 'background-color: rgb(30,143,158); color: rgb(0,0,80)'),
-                            ('Flunkyrock 2016', 'background-color: rgb(70,190,130); color: rgb(0,80,0)'),
-                            ('Flunkyrock 2017', 'background-color: rgb(174,56,52); color: rgb(255,255,255)')
+                            ('FlunkyRock 2015', 'background-color: rgb(30,143,158); color: rgb(0,0,80)'),
+                            ('FlunkyRock 2016', 'background-color: rgb(70,190,130); color: rgb(0,80,0)'),
+                            ('FlunkyRock 2017', 'background-color: rgb(174,56,52); color: rgb(255,255,255)')
             ]
             query.bindValue(':tournament_name', [QVariant(t[0]) for t in tournaments])
             query.bindValue(':style_sheet', [QVariant(t[1]) for t in tournaments])
