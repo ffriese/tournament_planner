@@ -68,9 +68,9 @@ class NamePage(QWizardPage):
 
             item.blockSignals(True)
             if item.currentText() in selections.values() and item.currentText() != '':
-                selections[item] = str(item.currentText())+' (2)'
+                selections[item] = item.currentText()+' (2)'
             else:
-                selections[item] = str(item.currentText())
+                selections[item] = item.currentText()
             item.clear()
             item.blockSignals(False)
         for i in range(0, self.teamTable.count()):

@@ -1,67 +1,53 @@
 import sys
 from PyQt5 import QtSql
-from PyQt5.QtCore import QVariant
+from PyQt5.QtCore import QVariant, pyqtSignal
 from PyQt5.QtSql import QSqlQuery
 
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow, QMenuBar, \
+    QMenu, QAction, QVBoxLayout, QLabel
 from PyQt5.QtGui import QIcon
 from wizards import TournamentWizard
 
 
-class App(QWidget):
+class App(QMainWindow):
     def __init__(self):
         super().__init__()
         self.title = 'FlunkyRock Planner'
         self.left = 10
         self.top = 10
-        self.width = 640
-        self.height = 480
-        self.tournament_wizard = None
-        self.layout = None
-        self.data = self.connect_to_database()
-        self.init_ui()
-
-    def init_ui(self):
+        self.width = 1280
+        self.height = 800
+        self.setGeometry(self.left, self.top, self.width, self.height)
         self.setWindowTitle(self.title)
         self.setWindowIcon(QIcon('favicon.ico'))
-        self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold;')
-        self.setGeometry(self.left, self.top, self.width, self.height)
-        self.layout = QGridLayout()
-        self.layout.setSpacing(45)
-        self.layout.setContentsMargins(45, 45, 45, 45)
-        self.setLayout(self.layout)
-        create_tournament_button = QPushButton('Create Tournament', self)
-        create_tournament_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        create_tournament_button.setStyleSheet('background-color: rgb(190, 190, 190); color: rgb(0, 0, 0)')
-        create_tournament_button.setIcon(self.style().standardIcon(getattr(QStyle, 'SP_FileDialogNewFolder')))
-        create_tournament_button.clicked.connect(self.show_tournament_wizard)
-        r = 0
-        c = 0
-        for t in self.data['tournaments']:
-            bt = QPushButton(t['name'])
-            bt.setStyleSheet(t['stylesheet'])
-            bt.setIcon(QIcon('favicon.ico'))
-            bt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            self.layout.addWidget(bt, r, c)
-            if c == 0:
-                c = 1
-            else:
-                c = 0
-                r += 1
+        self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold; color: white;')
 
-        self.layout.addWidget(create_tournament_button, r, c)
+        # self.homeMenu = self.menuBar().addMenu('Home')
+        # self.testAction = self.homeMenu.addAction('test')
+        self.homeAction = self.menuBar().addAction('Home')
+        self.homeAction.triggered.connect(self.toggle_home)
+
+        self.data = self.connect_to_database()
+        self.homeWidget = HomeWidget(self.data)
+        self.tournamentWidget = TournamentWidget()
+        self.setCentralWidget(self.homeWidget)
+
+        self.homeWidget.tournament_opened.connect(self.open_tournament)
 
         self.show()
 
-    def show_tournament_wizard(self):
-        if not self.tournament_wizard:
-            self.tournament_wizard = TournamentWizard(self.data['teams'])
+    def toggle_home(self):
+        if type(self.centralWidget()) == HomeWidget:
+            self.centralWidget().setParent(None)  # prevent_deletion
+            self.setCentralWidget(self.tournamentWidget)
+        else:
+            self.centralWidget().setParent(None)  # prevent_deletion
+            self.setCentralWidget(self.homeWidget)
 
-        def cleanup():
-            self.tournament_wizard = None
-
-        self.tournament_wizard.accepted.connect(cleanup)
-        self.tournament_wizard.show()
+    def open_tournament(self, tournament):
+        self.tournamentWidget.set_tournament(tournament)
+        self.centralWidget().setParent(None)  # prevent_deletion
+        self.setCentralWidget(self.tournamentWidget)
 
     # todo: move this from here into model part of the code
     @staticmethod
@@ -90,8 +76,12 @@ class App(QWidget):
 
         if 'teams' not in db.tables():
             # create tables
-            query.exec_('CREATE TABLE teams(id INTEGER PRIMARY KEY, name VARCHAR(40) NOT NULL)')
-            query.exec_('CREATE TABLE tournaments(id INTEGER PRIMARY KEY, name VARCHAR(40) NOT NULL, '
+            query.exec_('CREATE TABLE teams('
+                        'id INTEGER PRIMARY KEY, '
+                        'name VARCHAR(40) NOT NULL)')
+            query.exec_('CREATE TABLE tournaments('
+                        'id INTEGER PRIMARY KEY, '
+                        'name VARCHAR(40) NOT NULL, '
                         'stylesheet VARCHAR(50) NOT NULL )')
 
             # insert dummy tournaments, todo: remove, obviously
@@ -110,7 +100,8 @@ class App(QWidget):
 
             # insert dummy teams, todo: remove, obviously
             query.prepare('INSERT INTO teams(name) VALUES (:team_name)')
-            teams = ['Flunkengötter', 'Beardy Beer', 'Sportfreunde Gartenhaus']
+            teams = ['Flunkengötter', 'Beardy Beer', 'Sportfreunde Gartenhaus', 'Ralles Raketen',
+                     'Die Bierprinzessinnen']
             query.bindValue(':team_name', [QVariant(t) for t in teams])
             if not query.execBatch(mode=QSqlQuery.ValuesAsRows):
                 print(query.lastError().text())
@@ -123,6 +114,74 @@ class App(QWidget):
         data = read_data()
         db.close()
         return data
+
+
+class TournamentWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.layout = QGridLayout()
+        self.layout.setSpacing(0)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(self.layout)
+        self.nameLabel = QLabel()
+        self.layout.addWidget(self.nameLabel)
+
+    def set_tournament(self, tournament):
+        self.setStyleSheet(tournament['stylesheet'])
+        self.nameLabel.setText(tournament['name'])
+
+
+class HomeWidget(QWidget):
+    tournament_opened = pyqtSignal(dict)
+
+    def __init__(self, data):
+        super().__init__()
+        self.tournament_wizard = None
+        self.layout = None
+        self.data = data
+        self.init_ui()
+
+    def init_ui(self):
+
+        self.layout = QGridLayout()
+        self.layout.setSpacing(45)
+        self.layout.setContentsMargins(45, 45, 45, 45)
+        self.setLayout(self.layout)
+        create_tournament_button = QPushButton('Create Tournament', self)
+        create_tournament_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        create_tournament_button.setStyleSheet('background-color: rgb(190, 190, 190); color: rgb(0, 0, 0)')
+        create_tournament_button.setIcon(self.style().standardIcon(getattr(QStyle, 'SP_FileDialogNewFolder')))
+        create_tournament_button.clicked.connect(self.show_tournament_wizard)
+        r = 0
+        c = 0
+        for t in self.data['tournaments']:
+            bt = QPushButton(t['name'])
+            bt.setStyleSheet(t['stylesheet'])
+            bt.setIcon(QIcon('favicon.ico'))
+            bt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            bt.setProperty('tournament', t)
+            bt.clicked.connect(self.tournament_clicked)
+            self.layout.addWidget(bt, r, c)
+            if c == 0:
+                c = 1
+            else:
+                c = 0
+                r += 1
+
+        self.layout.addWidget(create_tournament_button, r, c)
+
+    def tournament_clicked(self):
+        self.tournament_opened.emit(self.sender().property('tournament'))
+
+    def show_tournament_wizard(self):
+        if not self.tournament_wizard:
+            self.tournament_wizard = TournamentWizard(self.data['teams'])
+
+        def cleanup():
+            self.tournament_wizard = None
+
+        self.tournament_wizard.accepted.connect(cleanup)
+        self.tournament_wizard.show()
 
 
 if __name__ == '__main__':
