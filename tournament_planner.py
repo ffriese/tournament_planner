@@ -1,12 +1,12 @@
 import sys
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import pyqtSignal, Qt
 
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow, QMenuBar, \
-    QMenu, QAction, QVBoxLayout, QLabel
+    QMenu, QAction, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem
 from PyQt5.QtGui import QIcon
 from wizards import TournamentWizard
-from tools import DataBaseManager
+from tools import DataBaseManager, DBException
 
 
 class App(QMainWindow):
@@ -49,7 +49,11 @@ class App(QMainWindow):
             self.switch_central_widget(self.homeWidget)
 
     def open_tournament(self, tournament):
-        self.tournamentWidget.set_tournament(tournament)
+        try:
+            groups = self.database.get_tournament_groups(tournament['id'])
+        except DBException as e:
+            print(e)
+        self.tournamentWidget.set_tournament(tournament, groups)
         self.switch_central_widget(self.tournamentWidget)
 
     def create_tournament(self, data):
@@ -70,11 +74,64 @@ class TournamentWidget(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self.layout)
         self.nameLabel = QLabel()
+        self.group_widget = GroupStageWidget()
         self.layout.addWidget(self.nameLabel)
+        self.layout.addWidget(self.group_widget)
 
-    def set_tournament(self, tournament):
+    def set_tournament(self, tournament, groups=None):
         self.setStyleSheet(tournament['stylesheet'])
         self.nameLabel.setText(tournament['name'])
+        if groups is not None:
+            self.group_widget.set_groups(groups)
+
+
+class GroupStageWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.layout = None
+    # groups = [
+    #     {'name': 'A',
+    #      'id': 2,
+    #      'size': 4,
+    #      'teams': [
+    #           ('Team1', 3),
+    #            ('Team2', 4)
+    #      ]
+    #     },
+    #     {'name': 'B' }
+    # ]
+
+    def set_groups(self, groups):
+        if self.layout is not None:
+            for i in reversed(range(self.layout.count())):
+                self.layout.itemAt(i).widget().setParent(None)
+        else:
+            self.layout = QGridLayout()
+            self.setLayout(self.layout)
+        for group in groups:
+            tw = QTableWidget()
+            tw.setRowCount(group['size'])
+            tw.verticalHeader().setDefaultSectionSize(20)
+            tw.setColumnCount(5)
+            tw.setHorizontalHeaderLabels(['Name', 'G', 'W', 'L', 'BD'])
+            tw.setColumnWidth(0, 180)
+            tw.setColumnWidth(1, 20)
+            tw.setColumnWidth(2, 20)
+            tw.setColumnWidth(3, 20)
+            tw.setColumnWidth(4, 40)
+            row = 0
+            for team in group['teams']:
+                tw.setItem(row, 0, QTableWidgetItem(team['name']))
+                tw.setItem(row, 1, QTableWidgetItem(str(team['games'])))
+                tw.setItem(row, 2, QTableWidgetItem(str(team['won'])))
+                tw.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
+                tw.setItem(row, 4, QTableWidgetItem('%r:%r' % (team['score'], team['conceded'])))
+                row += 1
+            # tw.sortByColumn(2, Qt.DescendingOrder)
+            self.layout.addWidget(tw)
+
+    def add_matches(self, matches):
+        pass
 
 
 class HomeWidget(QWidget):
