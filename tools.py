@@ -1,7 +1,6 @@
 import math
-from PyQt5 import QtSql
 from PyQt5.QtCore import QVariant
-from PyQt5.QtSql import QSqlQuery
+from PyQt5.QtSql import QSqlQuery, QSqlDatabase
 
 
 class DBException(Exception):
@@ -14,13 +13,13 @@ class DBException(Exception):
 
 class DataBaseManager:
     def __init__(self):
-        self.db = QtSql.QSqlDatabase.addDatabase('QSQLITE')
+        self.db = QSqlDatabase.addDatabase('QSQLITE')
         self.db.setDatabaseName('flunkyrock.db')
         self.init()
 
     def init(self):
         self.db.open()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
         if 'Teams' not in self.db.tables():
 
             query.exec_('CREATE TABLE Teams ('
@@ -102,22 +101,22 @@ class DataBaseManager:
             #    return {'Tournaments': [], 'Teams': []}
 
             # insert dummy teams, todo: remove, obviously
-            query.prepare('INSERT INTO Teams(name) VALUES (:team_name)')
-            teams = ['Flunkengötter', 'Beardy Beer', 'Sportfreunde Gartenhaus', 'Ralles Raketen',
-                     'Die Bierprinzessinnen']
-            query.bindValue(':team_name', [QVariant(t) for t in teams])
-            if not query.execBatch(mode=QSqlQuery.ValuesAsRows):
-                print(query.lastError().text())
-                self.db.close()
-            else:
-                print('created tables')
+            # query.prepare('INSERT INTO Teams(name) VALUES (:team_name)')
+            # teams = ['Flunkengötter', 'Beardy Beer', 'Sportfreunde Gartenhaus', 'Ralles Raketen',
+            #          'Die Bierprinzessinnen']
+            # query.bindValue(':team_name', [QVariant(t) for t in teams])
+            # if not query.execBatch(mode=QSqlQuery.ValuesAsRows):
+            #     print(query.lastError().text())
+            #     self.db.close()
+            # else:
+            #     print('created tables')
         else:
             print('found tables')
         self.db.close()
 
     def get_current_id(self, table):
         assert self.db.isOpen()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
         query.prepare('SELECT * FROM SQLITE_SEQUENCE WHERE name=:table')
         query.bindValue(':table', table)
         if query.exec_():
@@ -132,7 +131,7 @@ class DataBaseManager:
 
     def add_team(self, team_name):
         self.db.open()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
         try:
             query.prepare('INSERT INTO Teams(name) VALUES (:team_name)')
             query.bindValue(':team_name', team_name)
@@ -150,7 +149,7 @@ class DataBaseManager:
 
     def get_team_id(self, team_name):
         self.db.open()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
         try:
             query.prepare('SELECT id FROM Teams WHERE name=:team_name')
             query.bindValue(':team_name', team_name)
@@ -166,7 +165,7 @@ class DataBaseManager:
 
     def get_tournament_id(self, tournament_name):
         self.db.open()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
         try:
             query.prepare('SELECT id FROM Tournaments WHERE name=:tournament_name')
             query.bindValue(':tournament_name', tournament_name)
@@ -182,9 +181,9 @@ class DataBaseManager:
 
     def get_tournament_groups(self, tournament):
         self.db.open()
-        query = QtSql.QSqlQuery()
-        query2 = QtSql.QSqlQuery()
-        query3 = QtSql.QSqlQuery()
+        query = QSqlQuery()
+        query2 = QSqlQuery()
+        query3 = QSqlQuery()
 
         if type(tournament) is int:
             query.prepare('SELECT id FROM Tournament_Stages WHERE tournament == :id AND stage_index == 1')
@@ -237,12 +236,10 @@ class DataBaseManager:
             query.bindValue(':name', tournament)
         if query.exec_():
             while query.next():
-                print('group: ', query.record().value('id'))
                 query3.bindValue(':g_id', query.record().value('id'))
                 teams = []
                 if query3.exec_():
                     while query3.next():
-                        print(query3.record().value('team'))
                         query2.bindValue(':t_id', query3.record().value('team'))
                         if query2.exec_():
                             query2.next()
@@ -250,7 +247,6 @@ class DataBaseManager:
                         else:
                             print('TEAM not found')
                             raise DBException()
-                        print('team:', query3.record().value('team'), team_name)
                         teams.append({
                             'id': query3.value('team'),
                             'name': team_name,
@@ -276,8 +272,8 @@ class DataBaseManager:
     #  data.keys = ['group_size': int, 'name': str, 'teams_in_ko': int, 'teams': dict{name:id}}
     def import_two_stage_tournament(self, data):
         self.db.open()
-        query = QtSql.QSqlQuery()
-        query2 = QtSql.QSqlQuery()
+        query = QSqlQuery()
+        query2 = QSqlQuery()
 
         if 'Tournaments' not in self.db.tables():
             self.db.close()
@@ -395,7 +391,7 @@ class DataBaseManager:
     # data.keys = ['group_size': int, 'name': str, 'teams_in_ko': int, 'teams': list(str)}
     def store_tournament(self, data):
         self.db.open()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
 
         if 'Tournaments' not in self.db.tables():
             self.db.close()
@@ -403,13 +399,14 @@ class DataBaseManager:
             return
         try:
             self.db.transaction()
-            query.prepare('INSERT INTO Tournaments(name) VALUES (:name)')
+            query.prepare('INSERT INTO Tournaments(name, stylesheet) VALUES (:name, :stylesheet)')
             query.bindValue(':name', data['name'])
+            query.bindValue(':stylesheet', data['stylesheet'])
             if not query.exec_():
                 raise DBException(query)
             tournament_id = self.get_current_id('Tournaments')
             # create group_stage
-            query.prepare('INSERT INTO Tournament_Stages(tournament, stage_index) VALUES (:t_id, 1)')
+            query.prepare('INSERT INTO Tournament_Stages(tournament, stage_index, name) VALUES (:t_id, 1, "GROUP")')
             query.bindValue(':t_id', tournament_id)
             if not query.exec_():
                 raise DBException(query)
@@ -418,20 +415,34 @@ class DataBaseManager:
             query.bindValue(':ts_id', ts_id)
             if not query.exec_():
                 raise DBException(query)
-            query.prepare('INSERT INTO Groups(group_stage, size) VALUES(:gs_id, :size)')
+            query.prepare('INSERT INTO Groups(group_stage, size, name) VALUES(:gs_id, :size, :name)')
             for g in range(0, int(math.ceil(len(data['teams'])/int(data['group_size'])))):
                 query.bindValue(':gs_id', ts_id)
                 query.bindValue(':size', data['group_size'])
+                query.bindValue(':name', str(chr(g+65)))
                 if not query.exec_():
                     raise DBException(query)
 
-            # create ko-stages
+            # create ko-stages including 3rd place final
             teams_in_ko = data['teams_in_ko']
             index = 2
-            while teams_in_ko > 1:
-                query.prepare('INSERT INTO Tournament_Stages(tournament, stage_index) VALUES (:t_id, :idx)')
+            while teams_in_ko >= 1:
+                query.prepare('INSERT INTO Tournament_Stages(tournament, stage_index, name) VALUES (:t_id, :idx, :name)')
                 query.bindValue(':t_id', tournament_id)
                 query.bindValue(':idx', index)
+                if teams_in_ko > 2:
+                    query.bindValue(':name', 'KO%r' % int(teams_in_ko/2))
+                elif teams_in_ko == 2:
+                    if index > 2:
+                        query.bindValue(':name', 'KO_FINAL_3')
+                    else:
+                        query.bindValue(':name', 'KO_FINAL_1')
+                else:
+                    if index > 3:
+                        query.bindValue(':name', 'KO_FINAL_1')
+                    else:
+                        break
+
                 if not query.exec_():
                     raise DBException(query)
                 ts_id = self.get_current_id('Tournament_Stages')
@@ -477,7 +488,7 @@ class DataBaseManager:
     # in the finished version, but it is very convenient for now
     def read_data(self):
         self.db.open()
-        query = QtSql.QSqlQuery()
+        query = QSqlQuery()
         data = {}
         for table in self.db.tables():
 

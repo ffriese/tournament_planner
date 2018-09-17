@@ -5,7 +5,8 @@ import csv
 
 
 flunkyrocks = {'2015': 'background-color: rgb(30,143,158); color: rgb(0,0,80)',
-               '2016': 'background-color: rgb(70,190,130); color: rgb(0,80,0)'}
+               '2016': 'background-color: rgb(70,190,130); color: rgb(0,80,0)',
+               '2017': 'background-color: rgb(174,56,52); color: rgb(255,255,255)'}
 
 database = DataBaseManager()
 

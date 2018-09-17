@@ -1,10 +1,12 @@
 import sys
 
-from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtCore import pyqtSignal, Qt, QSize
 
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow, QMenuBar, \
     QMenu, QAction, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem
 from PyQt5.QtGui import QIcon
+
+from layout import FlowLayout
 from wizards import TournamentWizard
 from tools import DataBaseManager, DBException
 
@@ -69,7 +71,7 @@ class App(QMainWindow):
 class TournamentWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.layout = QGridLayout()
+        self.layout = QVBoxLayout()
         self.layout.setSpacing(0)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self.layout)
@@ -88,37 +90,24 @@ class TournamentWidget(QWidget):
 class GroupStageWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.layout = None
-    # groups = [
-    #     {'name': 'A',
-    #      'id': 2,
-    #      'size': 4,
-    #      'teams': [
-    #           ('Team1', 3),
-    #            ('Team2', 4)
-    #      ]
-    #     },
-    #     {'name': 'B' }
-    # ]
+        self.layout = FlowLayout()
+        self.setLayout(self.layout)
 
     def set_groups(self, groups):
-        if self.layout is not None:
-            for i in reversed(range(self.layout.count())):
-                self.layout.itemAt(i).widget().setParent(None)
-        else:
-            self.layout = QGridLayout()
-            self.setLayout(self.layout)
+        for i in reversed(range(self.layout.count())):
+            self.layout.itemAt(i).widget().setParent(None)
         for group in groups:
             tw = QTableWidget()
             tw.setRowCount(group['size'])
             tw.verticalHeader().setDefaultSectionSize(20)
             tw.setColumnCount(5)
-            tw.setHorizontalHeaderLabels(['Name', 'G', 'W', 'L', 'BD'])
+            tw.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
             tw.setColumnWidth(0, 180)
             tw.setColumnWidth(1, 20)
             tw.setColumnWidth(2, 20)
             tw.setColumnWidth(3, 20)
             tw.setColumnWidth(4, 40)
+            tw.setMinimumSize(QSize(180+20+20+20+40+13, 10*group['size']))
             row = 0
             for team in group['teams']:
                 tw.setItem(row, 0, QTableWidgetItem(team['name']))
@@ -126,12 +115,20 @@ class GroupStageWidget(QWidget):
                 tw.setItem(row, 2, QTableWidgetItem(str(team['won'])))
                 tw.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
                 tw.setItem(row, 4, QTableWidgetItem('%r:%r' % (team['score'], team['conceded'])))
+                for c in range(5):
+                    tw.item(row, c).setFlags(tw.item(row, c).flags() ^ Qt.ItemIsEnabled)
                 row += 1
-            # tw.sortByColumn(2, Qt.DescendingOrder)
+
             self.layout.addWidget(tw)
 
     def add_matches(self, matches):
         pass
+
+
+# todo: implement with retractable match-view
+class GroupWidget(QWidget):
+    def __init__(self):
+        super().__init__()
 
 
 class HomeWidget(QWidget):

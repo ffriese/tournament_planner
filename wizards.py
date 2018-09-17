@@ -29,6 +29,8 @@ class TournamentWizard(QWizard):
     def create_tournament(self):
         data = {
                 'name': self.namePage.lineEdit.text(),
+                # todo: create style-selector
+                'stylesheet':  'background-color: rgb(161,58,139); color: rgb(255,255,255)',
                 'teams': [self.namePage.teamTable.itemWidget(self.namePage.teamTable.item(i)).currentText()
                           for i in range(0, self.namePage.teamTable.count())],
                 'group_size': int(self.tournamentSettingsPage.groupComboBox.currentData()),
