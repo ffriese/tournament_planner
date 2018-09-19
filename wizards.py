@@ -183,7 +183,7 @@ class TournamentSettingsPage(QWizardPage):
 
     def estimate_games(self):
         if self.finalComboBox.currentData() is not None and self.groupComboBox.currentData() is not None:
-            est_games = int(math.sqrt(int(self.finalComboBox.currentData())))+int(self.groupComboBox.currentData())-1
+            est_games = int(math.log2(int(self.finalComboBox.currentData())))+int(self.groupComboBox.currentData())-1
             self.maxGamesLabel.setText(str(est_games))
 
 #  ----------------------------------------------------------------------------
