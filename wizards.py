@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import QWizard, QWizardPage, QComboBox, QLabel, QLineEdit, 
     QStyle, QListWidgetItem, QListWidget, \
     QCompleter, QSizePolicy, QGridLayout
 
+from widgets import FilteringComboBox
+
 
 class TournamentWizard(QWizard):
 
@@ -13,7 +15,7 @@ class TournamentWizard(QWizard):
     def __init__(self, teams):
         super().__init__()
         self.setWindowTitle('Create Tournament')
-        self.setWindowIcon(self.style().standardIcon(getattr(QStyle, 'SP_FileDialogNewFolder')))
+        self.setWindowIcon(QIcon('icons/application_add'))
         self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold; '
                            'color: rgb(255,255,255)')
         self.resize(700, 700)
@@ -186,42 +188,4 @@ class TournamentSettingsPage(QWizardPage):
             est_games = int(math.log2(int(self.finalComboBox.currentData())))+int(self.groupComboBox.currentData())-1
             self.maxGamesLabel.setText(str(est_games))
 
-#  ----------------------------------------------------------------------------
-#
-#  FilteringComboBox class taken from http://www.gulon.co.uk/2013/05/07/a-filtering-qcombobox/
-#
-#  "THE BEER-WARE LICENSE" (Revision 42):
-#  Rob Kent from http://www.gulon.co.uk wrote this class.  As long as you retain this notice you
-#  can do whatever you want with this stuff. If we meet some day, and you think
-#  this stuff is worth it, you can buy me a beer in return.
-#  ----------------------------------------------------------------------------
-
-
-class FilteringComboBox(QComboBox):
-    def __init__(self, parent=None, *args):
-        QComboBox.__init__(self, parent, *args)
-        self.setEditable(True)
-        self.setFocusPolicy(Qt.StrongFocus)
-        self._proxy = QSortFilterProxyModel(self)
-        self._proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self._proxy.setSourceModel(self.model())
-
-        self._completer = QCompleter(self._proxy, self)
-        self._completer.activated.connect(self.on_completer_activated)
-        self._completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
-        p = self._completer
-        stylesheet = self.styleSheet()
-        while p.parent() is not None:
-            stylesheet = p.parent().styleSheet()
-            p = p.parent()
-
-        self._completer.popup().setStyleSheet(stylesheet)
-        self.setCompleter(self._completer)
-
-        self.lineEdit().textEdited.connect(self._proxy.setFilterFixedString)
-
-    def on_completer_activated(self, text):
-        if not text: return
-        self.setCurrentIndex(self.findText(text))
-        self.activated[str].emit(self.currentText())
 

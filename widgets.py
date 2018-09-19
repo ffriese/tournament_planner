@@ -63,7 +63,7 @@ class TournamentWidget(QWidget):
             db_teams = []
         if t_teams is None:
             t_teams = []
-        self.widgets['manage_teams'].set_teams(chosen_teams=t_teams, db_teams=db_teams, count=tournament['num_teams'])
+        self.widgets['manage_teams'].set_teams(t_teams=t_teams, db_teams=db_teams, count=tournament['num_teams'])
         if status is not None:
             self.main_widget.set_status(status)
 
@@ -138,7 +138,15 @@ class TeamSelectionWidget(QWidget):
         self.layout = QVBoxLayout()
         self.teamTable = QListWidget(self)
 
-    def set_teams(self, chosen_teams, db_teams, count):
+    def paintEvent(self, q_paint_event):
+        opt = QStyleOption()
+        opt.initFrom(self.parent())
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
+
+    def set_teams(self, t_teams, db_teams, count):
+        print(t_teams)
+        print(db_teams)
         # clear old
         while 0 < self.teamTable.count():
             self.teamTable.takeItem(self.teamTable.count()-1)
@@ -171,6 +179,12 @@ class GroupStageWidget(QWidget):
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self.grid_layout)
         self.layout().addWidget(self.scroll)
+
+    def paintEvent(self, q_paint_event):
+        opt = QStyleOption()
+        opt.initFrom(self.parent())
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
 
     def set_groups(self, groups, teams_only=False):
         for i in reversed(range(self.flow_layout.count())):

@@ -39,13 +39,13 @@ class App(QMainWindow):
         self.homeWidget.tournament_opened.connect(self.open_tournament)
         self.homeWidget.tournament_created.connect(self.create_tournament)
 
-        #directory = QDir('icons')
-        #files = directory.entryList(["*.png"])
-        #for file in files:
-        #    print(file)
-        #    image = QImage()
-        #    image.load(QCoreApplication.applicationDirPath() + "/icons/" + file)
-        #    image.save(QCoreApplication.applicationDirPath() + "/icons/" + file)
+        directory = QDir('icons')
+        files = directory.entryList(["*.png"])
+        for file in files:
+            #print(file)
+            image = QImage()
+            image.load(QCoreApplication.applicationDirPath() + "/icons/" + file)
+            image.save(QCoreApplication.applicationDirPath() + "/icons/" + file)
 
         self.show()
 
