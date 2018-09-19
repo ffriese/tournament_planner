@@ -1,6 +1,9 @@
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+import os
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, QSortFilterProxyModel
+from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QSizePolicy, QPushButton, QToolButton, \
-    QLabel, QStyle, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget
+    QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
+    QCompleter, QStyleOption, QStyle
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -16,19 +19,23 @@ class TournamentWidget(QWidget):
         self.setLayout(self.layout)
         self.toolbar = QWidget()
         self.toolbar.setLayout(QHBoxLayout())
-        self.toolbar.setMaximumHeight(30)
+        self.toolbar.setMinimumHeight(25)
+        self.toolbar.setMaximumHeight(25)
         self.nameLabel = QLabel()
-        self.nameLabel.setMaximumHeight(30)
+        self.nameLabel.setMaximumHeight(25)
         self.main_page_button = QToolButton()
-        self.main_page_button.setIcon(self.style().standardIcon(getattr(QStyle, 'SP_ArrowBack')))
+        self.main_page_button.setFixedSize(20, 20)
+        self.main_page_button.setIcon(QIcon('icons/arrow_left.png'))
         self.main_page_button.clicked.connect(self.show_main_page)
-        self.toolbar.layout().addWidget(self.nameLabel)
+        self.toolbar.layout().setContentsMargins(5, 0, 0, 0)
         self.toolbar.layout().addWidget(self.main_page_button)
+        self.toolbar.layout().addWidget(self.nameLabel)
         self.main_widget = TournamentMainWidget(self)
         self.layout.addWidget(self.toolbar)
         self.layout.addWidget(self.main_widget)
         self.widgets = {
-            'groups': GroupStageWidget()
+            'groups': GroupStageWidget(),
+            'manage_teams': TeamSelectionWidget()
         }
         for widget_name in self.widgets:
             self.layout.addWidget(self.widgets[widget_name])
@@ -39,17 +46,24 @@ class TournamentWidget(QWidget):
         for widget_name in self.widgets:
             self.widgets[widget_name].hide()
         self.main_widget.show()
+        self.main_page_button.hide()
 
     def react_to_button(self, widget_name):
         if widget_name in self.widgets:
             self.main_widget.hide()
+            self.main_page_button.show()
             self.widgets[widget_name].show()
 
-    def set_tournament(self, tournament, groups=None, status=None):
+    def set_tournament(self, tournament, db_teams=None, t_teams=None, groups=None, status=None):
         self.setStyleSheet(tournament['stylesheet'])
         self.nameLabel.setText(tournament['name'])
         if groups is not None:
             self.widgets['groups'].set_groups(groups)
+        if db_teams is None:
+            db_teams = []
+        if t_teams is None:
+            t_teams = []
+        self.widgets['manage_teams'].set_teams(chosen_teams=t_teams, db_teams=db_teams, count=tournament['num_teams'])
         if status is not None:
             self.main_widget.set_status(status)
 
@@ -63,27 +77,33 @@ class TournamentMainWidget(QWidget):
         self.buttons = {
             'tournament_settings': {
                 'bt': QPushButton('Tournament Settings', self),
-                'icon': self.style().standardIcon(getattr(QStyle, 'SP_ComputerIcon')),
-                'enabled': lambda stage, status: True
+                'icon': QIcon('icons/application_edit.png'),
+                'enabled': lambda stage, status: stage > -1  # tournament not completely finished
                              },
             'manage_teams': {
                 'bt': QPushButton('Manage Teams', self),
-                'icon': self.style().standardIcon(getattr(QStyle, 'SP_FileDialogNewFolder')),
-                'enabled': lambda stage, status: stage == 0
+                'icon': QIcon('icons/application_side_list.png'),
+                'enabled': lambda stage, status: stage == 0  # groups not yet drawn
                              },
             'groups': {
                 'bt': QPushButton('Groups', self),
-                'icon': self.style().standardIcon(getattr(QStyle, 'SP_DirIcon')),
-                'enabled': lambda stage, status: True
+                'icon': QIcon('icons/table.png'),
+                'enabled': lambda stage, status: True  # always show, empty groups aren't a bad thing :P
                              },
             'draw_groups': {
                 'bt': QPushButton('Draw Groups', self),
-                'icon': self.style().standardIcon(getattr(QStyle, 'SP_BrowserReload')),
-                'enabled': lambda stage, status: stage == 0 and status == TournamentStageStatus.IN_PROGRESS
+                'icon': QIcon('icons/text_padding_left.png'),
+                'enabled': lambda stage, status: stage == 0 and status == TournamentStageStatus.IN_PROGRESS  # obvious
                              },
         }
         self.status = None
         self.init_ui()
+
+    def paintEvent(self, q_paint_event):
+        opt = QStyleOption()
+        opt.initFrom(self.parent())
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
 
     def init_ui(self):
         self.layout = QGridLayout()
@@ -110,6 +130,32 @@ class TournamentMainWidget(QWidget):
                 self.buttons[button]['bt'].show()
             else:
                 self.buttons[button]['bt'].hide()
+
+
+class TeamSelectionWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.layout = QVBoxLayout()
+        self.teamTable = QListWidget(self)
+
+    def set_teams(self, chosen_teams, db_teams, count):
+        # clear old
+        while 0 < self.teamTable.count():
+            self.teamTable.takeItem(self.teamTable.count()-1)
+        while count > self.teamTable.count():
+            item = QListWidgetItem(self.teamTable)
+            team_item = FilteringComboBox(self)
+            # team_item.currentTextChanged.connect(self.team_selected)
+            px = QPixmap(16, 16)
+            px.fill(QColor(0, 0, 0, 0))
+            painter = QPainter()
+            painter.begin(px)
+            painter.drawText(0, 0, 16, 16, Qt.AlignRight | Qt.AlignVCenter, str(self.teamTable.count()))
+            painter.end()
+            item.setIcon(QIcon(px))
+            self.teamTable.addItem(item)
+            self.teamTable.setItemWidget(item, team_item)
+            item.setSizeHint(team_item.sizeHint())
 
 
 class GroupStageWidget(QWidget):
@@ -150,6 +196,7 @@ class GroupWidget(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table.verticalHeader().sectionPressed.disconnect()
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.table.setFocusPolicy(Qt.NoFocus)
         if not self.teams_only:
             self.table.setColumnCount(5)
             self.table.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
@@ -174,12 +221,56 @@ class GroupWidget(QWidget):
     def set_group(self, group):
         row = 0
         for team in group['teams']:
-            self.table.setItem(row, 0, QTableWidgetItem(team['name']))
+            icon_path = 'icons/%s.png' % team['name']
+            #if not os.path.isfile(os.path.abspath(icon_path)):
+            #    icon_path = 'icons/trophy.png'
+            self.table.setItem(row, 0, QTableWidgetItem(QIcon(icon_path), team['name']))
             if not self.teams_only:
                 self.table.setItem(row, 1, QTableWidgetItem(str(team['games'])))
                 self.table.setItem(row, 2, QTableWidgetItem(str(team['won'])))
                 self.table.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
                 self.table.setItem(row, 4, QTableWidgetItem('%r:%r' % (team['score'], team['conceded'])))
             for c in range(self.table.columnCount()):
-                self.table.item(row, c).setFlags(self.table.item(row, c).flags() ^ Qt.ItemIsEnabled)
+                self.table.item(row, c).setFlags(self.table.item(row, c).flags() ^ Qt.ItemIsEditable)
+                self.table.item(row, c).setFlags(self.table.item(row, c).flags() ^ Qt.ItemIsSelectable)
             row += 1
+
+
+#  ----------------------------------------------------------------------------
+#
+#  FilteringComboBox class taken from http://www.gulon.co.uk/2013/05/07/a-filtering-qcombobox/
+#
+#  "THE BEER-WARE LICENSE" (Revision 42):
+#  Rob Kent from http://www.gulon.co.uk wrote this class.  As long as you retain this notice you
+#  can do whatever you want with this stuff. If we meet some day, and you think
+#  this stuff is worth it, you can buy me a beer in return.
+#  ----------------------------------------------------------------------------
+
+
+class FilteringComboBox(QComboBox):
+    def __init__(self, parent=None, *args):
+        QComboBox.__init__(self, parent, *args)
+        self.setEditable(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._proxy = QSortFilterProxyModel(self)
+        self._proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self._proxy.setSourceModel(self.model())
+
+        self._completer = QCompleter(self._proxy, self)
+        self._completer.activated.connect(self.on_completer_activated)
+        self._completer.setCompletionMode(QCompleter.UnfilteredPopupCompletion)
+        p = self._completer
+        stylesheet = self.styleSheet()
+        while p.parent() is not None:
+            stylesheet = p.parent().styleSheet()
+            p = p.parent()
+
+        self._completer.popup().setStyleSheet(stylesheet)
+        self.setCompleter(self._completer)
+
+        self.lineEdit().textEdited.connect(self._proxy.setFilterFixedString)
+
+    def on_completer_activated(self, text):
+        if not text: return
+        self.setCurrentIndex(self.findText(text))
+        self.activated[str].emit(self.currentText())

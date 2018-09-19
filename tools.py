@@ -104,9 +104,19 @@ class DataBaseManager:
             raise DBException(query)
 
     @staticmethod
-    def simple_get(query, field):
+    def simple_get(query, key):
         assert query.next()
-        return query.value(field)
+        return query.value(key)
+
+    @staticmethod
+    def simple_get_multiple(query, keys):
+        result = []
+        while query.next():
+            row = {}
+            for key in keys:
+                row[key] = query.value(key)
+            result.append(row)
+        return result
 
     def get_current_id(self, table):
         assert self.db.isOpen()
@@ -153,7 +163,7 @@ class DataBaseManager:
         finally:
             self.db.close()
 
-    def get_tournament_status(self, tournament):
+    def get_tournament_status(self, tournament_id):
         self.db.open()
         try:
             query = QSqlQuery()
@@ -163,7 +173,7 @@ class DataBaseManager:
                           '    (SELECT id FROM Tournament_Stages WHERE tournament == :id))) as teams_in_groups,'
                           '(SELECT num_teams FROM Tournaments WHERE id == :id) as expected_teams,'
                           '(SELECT COUNT() FROM Tournament_Teams WHERE tournament == :id) as tournament_teams')
-            query.bindValue(':id', tournament)
+            query.bindValue(':id', tournament_id)
 
             self.execute_query(query)
             assert query.next()
@@ -214,7 +224,7 @@ class DataBaseManager:
                           'WHERE tournament == :id'
                           )
 
-            query.bindValue(':id', tournament)
+            query.bindValue(':id', tournament_id)
             self.execute_query(query)
             keys = ['id', 'name', 'stage_status']
             stages = []
@@ -234,7 +244,18 @@ class DataBaseManager:
         finally:
             self.db.close()
 
-    def get_tournament_groups(self, tournament):
+    def get_tournament_teams(self, tournament_id):
+        self.db.open()
+        query = QSqlQuery()
+        try:
+            query.prepare('SELECT * FROM Tournament_Teams JOIN Teams ON Tournament_Teams.team = Teams.id '
+                          'WHERE Tournament_Teams.tournament == :t_id')
+            self.execute_query(query)
+            return self.simple_get_multiple(query, ['id', 'name'])
+        finally:
+            self.db.close()
+
+    def get_tournament_groups(self, tournament_id):
         self.db.open()
         query = QSqlQuery()
         query2 = QSqlQuery()
@@ -242,7 +263,7 @@ class DataBaseManager:
         try:
             groups = []
             query.prepare('SELECT id FROM Tournament_Stages WHERE tournament == :id AND stage_index == 1')
-            query.bindValue(':id', tournament)
+            query.bindValue(':id', tournament_id)
 
             query2.prepare('SELECT name FROM Teams WHERE id == :t_id')
 
@@ -270,7 +291,7 @@ class DataBaseManager:
             query.prepare('SELECT * FROM Groups WHERE group_stage IN '
                           '(SELECT tournament_stage from Group_Stages WHERE tournament_stage IN '
                           '(SELECT id FROM Tournament_Stages WHERE tournament == :id))')
-            query.bindValue(':id', tournament)
+            query.bindValue(':id', tournament_id)
 
             self.execute_query(query)
             while query.next():
@@ -532,7 +553,7 @@ class DataBaseManager:
 #
 # EWIGE TABELLE:
 """
-SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, SUM(Loss) as Lost,
+SELECT team, name, Games, Won, Lost, Bierferenz, Score, Against FROM (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, SUM(Loss) as Lost,
   Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , SUM(against) as Against FROM
 ( SELECT team1 as team,
      CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against,
@@ -545,7 +566,7 @@ SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, SUM(Loss) as Lost,
   FROM Matches
 ) t
 GROUP BY team
-ORDER By Won DESC, Bierferenz DESC, Score DESC, Against
+ORDER By Won DESC, Bierferenz DESC, Score DESC, Against) as ewig JOIN Teams ON ewig.team == Teams.id
 """
 
 # get stage completion

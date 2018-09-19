@@ -1,9 +1,9 @@
 import sys
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import pyqtSignal, QDir, QCoreApplication
 
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QImage
 
 from widgets import TournamentWidget
 from wizards import TournamentWizard
@@ -22,13 +22,15 @@ class App(QMainWindow):
         self.database = DataBaseManager()
         self.setGeometry(self.left, self.top, self.width, self.height)
         self.setWindowTitle(self.title)
-        self.setWindowIcon(QIcon('favicon.ico'))
+        self.setWindowIcon(QIcon('icons/favicon.ico'))
         self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold; color: white;')
 
+        self.toolbar = self.addToolBar("Main")
+        self.homeAction = self.toolbar.addAction(QIcon('icons/house.png'), 'Home')
         # self.homeMenu = self.menuBar().addMenu('Home')
         # self.testAction = self.homeMenu.addAction('test')
-        self.homeAction = self.menuBar().addAction('Home')
-        self.homeAction.triggered.connect(self.toggle_home)
+        #self.homeAction = self.menuBar().addAction('Home')
+        self.homeAction.triggered.connect(self.go_home)
         self.fetch_data()
         self.homeWidget = HomeWidget(self.data)
         self.tournamentWidget = TournamentWidget()
@@ -36,6 +38,14 @@ class App(QMainWindow):
 
         self.homeWidget.tournament_opened.connect(self.open_tournament)
         self.homeWidget.tournament_created.connect(self.create_tournament)
+
+        #directory = QDir('icons')
+        #files = directory.entryList(["*.png"])
+        #for file in files:
+        #    print(file)
+        #    image = QImage()
+        #    image.load(QCoreApplication.applicationDirPath() + "/icons/" + file)
+        #    image.save(QCoreApplication.applicationDirPath() + "/icons/" + file)
 
         self.show()
 
@@ -46,17 +56,20 @@ class App(QMainWindow):
         self.centralWidget().setParent(None)  # prevent_deletion
         self.setCentralWidget(widget)
 
-    def toggle_home(self):
-        if type(self.centralWidget()) == HomeWidget:
-            self.switch_central_widget(self.tournamentWidget)
-        else:
-            self.switch_central_widget(self.homeWidget)
+    def go_home(self):
+        # if type(self.centralWidget()) == HomeWidget:
+        #    self.switch_central_widget(self.tournamentWidget)
+        # else:
+
+        self.switch_central_widget(self.homeWidget)
 
     def open_tournament(self, tournament):
         try:
+            t_teams = self.database.get_tournament_teams(tournament['id'])
             groups = self.database.get_tournament_groups(tournament['id'])
             status = self.database.get_tournament_status(tournament['id'])
-            self.tournamentWidget.set_tournament(tournament, groups, status)
+            self.tournamentWidget.set_tournament(tournament, db_teams=self.data['Teams'],
+                                                 t_teams=t_teams, groups=groups, status=status)
             self.switch_central_widget(self.tournamentWidget)
             self.tournamentWidget.show_main_page()
         except DBException as e:
@@ -92,14 +105,14 @@ class HomeWidget(QWidget):
         create_tournament_button = QPushButton('Create Tournament', self)
         create_tournament_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         create_tournament_button.setStyleSheet('background-color: rgb(190, 190, 190); color: rgb(0, 0, 0)')
-        create_tournament_button.setIcon(self.style().standardIcon(getattr(QStyle, 'SP_FileDialogNewFolder')))
+        create_tournament_button.setIcon(QIcon('icons/application_add'))
         create_tournament_button.clicked.connect(self.show_tournament_wizard)
         row = 0
         col = 0
         for t in self.data['Tournaments']:
             bt = QPushButton(t['name'])
             bt.setStyleSheet(t['stylesheet'])
-            bt.setIcon(QIcon('favicon.ico'))
+            bt.setIcon(QIcon('icons/favicon.ico'))
             bt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             bt.setProperty('tournament', t)
             bt.clicked.connect(self.tournament_clicked)
