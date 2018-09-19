@@ -250,6 +250,7 @@ class DataBaseManager:
         try:
             query.prepare('SELECT * FROM Tournament_Teams JOIN Teams ON Tournament_Teams.team = Teams.id '
                           'WHERE Tournament_Teams.tournament == :t_id')
+            query.bindValue(':t_id', tournament_id)
             self.execute_query(query)
             return self.simple_get_multiple(query, ['id', 'name'])
         finally:

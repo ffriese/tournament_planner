@@ -136,7 +136,10 @@ class TeamSelectionWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(45,0,45,0)
         self.teamTable = QListWidget(self)
+        self.layout.addWidget(self.teamTable)
+        self.setLayout(self.layout)
 
     def paintEvent(self, q_paint_event):
         opt = QStyleOption()
@@ -146,7 +149,6 @@ class TeamSelectionWidget(QWidget):
 
     def set_teams(self, t_teams, db_teams, count):
         print(t_teams)
-        print(db_teams)
         # clear old
         while 0 < self.teamTable.count():
             self.teamTable.takeItem(self.teamTable.count()-1)
