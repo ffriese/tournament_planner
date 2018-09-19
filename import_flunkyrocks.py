@@ -17,7 +17,7 @@ for year in sorted(flunkyrocks.keys()):
     ko_stages = {}
     finals = {}
 
-    with open('%s.csv' % year, 'r') as csvfile:
+    with open('%s.csv' % year, 'r', encoding='utf-8') as csvfile:
         reader = csv.reader(csvfile, delimiter=';', quotechar='"')
         for row in reader:
             team1 = row[0]
