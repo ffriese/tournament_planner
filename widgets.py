@@ -542,7 +542,7 @@ class GroupTable(QTableWidget):
 
             if event.isAccepted() and type(source) == GroupTable:
                 before = source.rowCount()
-                source.setRowCount(source.team_count)
+                source.setRowCount(source.team_count +1)
             #    print('%r -> %r', (before, source.rowCount()))
             #else:
             #    print(type(source), event.isAccepted())
