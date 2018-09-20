@@ -1,6 +1,9 @@
+import inspect
 import os
-from PyQt5.QtCore import QSize, Qt, pyqtSignal, QSortFilterProxyModel
-from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, QSortFilterProxyModel, QMimeData, QDataStream, QModelIndex, QPoint, \
+    QCoreApplication
+from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QDropEvent, QStandardItemModel, QDragMoveEvent, \
+    QDragLeaveEvent, QDragEnterEvent
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QSizePolicy, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
     QCompleter, QStyleOption, QStyle, QAbstractItemView
@@ -344,9 +347,7 @@ class GroupDrawWidget(QWidget):
         self.layout = QHBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.group_stage_widget = GroupStageWidget(parent=self, enable_drag_drop=True)
-        self.team_list_widget = QListWidget()
-        self.team_list_widget.setDragDropMode(QAbstractItemView.DragDrop)
-        self.team_list_widget.setDefaultDropAction(Qt.MoveAction)
+        self.team_list_widget = TeamDrawListWidget()
         self.layout.addWidget(self.group_stage_widget)
         self.layout.addWidget(self.team_list_widget)
         self.v_layout.addLayout(self.layout)
@@ -370,6 +371,33 @@ class GroupDrawWidget(QWidget):
         opt.initFrom(self.parent())
         p = QPainter(self)
         self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
+
+
+class TeamDrawListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+
+    def dropEvent(self, event: QDropEvent):
+        model = QStandardItemModel()
+        model.dropMimeData(event.mimeData(), Qt.CopyAction, 0, 0, QModelIndex())
+        drop_data = model.item(0, 0).text()
+        if drop_data == '':
+            event.ignore()
+            return
+        source = event.source()
+
+        super().dropEvent(event)
+        if event.isAccepted() and type(source) == GroupTable:
+            source.setRowCount(source.team_count + 1)
+
+    def switch_item(self, original, new):
+        for i in range(self.count()):
+            if self.item(i) is not None and self.item(i).text() == original:
+                self.item(i).setText(new)
+                return True
+        return False
 
 
 class GroupStageWidget(QWidget):
@@ -404,6 +432,7 @@ class GroupStageWidget(QWidget):
                 tw.table.setDefaultDropAction(Qt.MoveAction)
                 tw.table.setDragDropMode(QAbstractItemView.DragDrop)
                 tw.table.setDragDropOverwriteMode(False)
+                #tw.table.setDropIndicatorShown(False)
             self.group_widgets.append(tw)
             self.flow_layout.addWidget(tw)
 
@@ -428,51 +457,107 @@ class GroupWidget(QWidget):
         super().__init__(parent)
         self.setLayout(QVBoxLayout())
         self.teams_only = teams_only
-        self.table = QTableWidget()
-        self.table.setRowCount(group['size'])
-        self.table.verticalHeader().setDefaultSectionSize(20)
-        self.table.horizontalHeader().sectionPressed.disconnect()
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.table.verticalHeader().sectionPressed.disconnect()
-        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        self.table.setFocusPolicy(Qt.NoFocus)
-        if not self.teams_only:
-            self.table.setColumnCount(5)
-            self.table.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
-            self.table.setColumnWidth(1, 20)
-            self.table.setColumnWidth(2, 20)
-            self.table.setColumnWidth(3, 20)
-            self.table.setColumnWidth(4, 40)
-            size = QSize(250 + 20 + 20 + 20 + 40 + 13,  20 * group['size'] + 22)
-            self.table.setMinimumSize(size)
-            self.table.setMaximumSize(size)
-        else:
-            self.table.setColumnCount(1)
-            self.table.setHorizontalHeaderLabels([group['name']])#
-            size = QSize(250 + 13,  20 * group['size'] + 22)
-            self.table.setMinimumSize(size)
-            self.table.setMaximumSize(size)
-        self.table.setColumnWidth(0, 250)
-        self.set_group(group)
+        self.table = GroupTable(group=group, parent=self, teams_only=teams_only)
         self.layout().addWidget(self.table)
 
-    # todo: maybe ensure that group-size matches
-    def set_group(self, group):
+
+class GroupTable(QTableWidget):
+    def __init__(self, group, parent=None, teams_only=False):
+        super().__init__(parent=parent)
+        self.teams_only = teams_only
+        self.team_count = group['size']
+        self.setRowCount(group['size'])
+        self.verticalHeader().setDefaultSectionSize(20)
+        self.horizontalHeader().sectionPressed.disconnect()
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.verticalHeader().sectionPressed.disconnect()
+        self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.setFocusPolicy(Qt.NoFocus)
+        if not self.teams_only:
+            self.setColumnCount(5)
+            self.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
+            self.setColumnWidth(1, 20)
+            self.setColumnWidth(2, 20)
+            self.setColumnWidth(3, 20)
+            self.setColumnWidth(4, 40)
+            size = QSize(250 + 20 + 20 + 20 + 40 + 13, 20 * group['size'] + 22)
+            self.setMinimumSize(size)
+            self.setMaximumSize(size)
+        else:
+            self.setColumnCount(1)
+            self.setHorizontalHeaderLabels([group['name']])  #
+            size = QSize(250 + 13, 20 * group['size'] + 22)
+            self.setMinimumSize(size)
+            self.setMaximumSize(size)
+        self.setColumnWidth(0, 250)
         row = 0
         for team in group['teams']:
             icon_path = 'icons/%s.png' % team['name']
-            #if not os.path.isfile(os.path.abspath(icon_path)):
+            # if not os.path.isfile(os.path.abspath(icon_path)):
             #    icon_path = 'icons/trophy.png'
-            self.table.setItem(row, 0, QTableWidgetItem(QIcon(icon_path), team['name']))
+            self.setItem(row, 0, QTableWidgetItem(QIcon(icon_path), team['name']))
             if not self.teams_only:
-                self.table.setItem(row, 1, QTableWidgetItem(str(team['games'])))
-                self.table.setItem(row, 2, QTableWidgetItem(str(team['won'])))
-                self.table.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
-                self.table.setItem(row, 4, QTableWidgetItem('%r:%r' % (team['score'], team['conceded'])))
-            for c in range(self.table.columnCount()):
-                self.table.item(row, c).setFlags(self.table.item(row, c).flags() ^ Qt.ItemIsEditable)
-                self.table.item(row, c).setFlags(self.table.item(row, c).flags() ^ Qt.ItemIsSelectable)
+                self.setItem(row, 1, QTableWidgetItem(str(team['games'])))
+                self.setItem(row, 2, QTableWidgetItem(str(team['won'])))
+                self.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
+                self.setItem(row, 4, QTableWidgetItem('%r:%r' % (team['score'], team['conceded'])))
+            for c in range(self.columnCount()):
+                self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsEditable)
+                self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsSelectable)
             row += 1
+
+    def switch_item(self, original, new):
+        for i in range(self.rowCount()):
+            if self.item(i, 0) is not None and self.item(i, 0).text() == original:
+                self.item(i, 0).setText(new)
+                return True
+        return False
+
+    def dropEvent(self, event: QDropEvent):
+        model = QStandardItemModel()
+        model.dropMimeData(event.mimeData(), Qt.CopyAction, 0, 0, QModelIndex())
+        #
+        source = event.source()
+        #if source == self:
+        #    event.ignore()
+        #    return
+        index = self.indexAt(event.pos())
+        row = index.row()
+        if index.isValid() and self.team_count >= row+1:
+            new_ev, modified = self.modify_event(event, index)
+            item = self.item(row, 0)
+            if item is not None and item.text() != '':
+                # swap
+                event.ignore()
+                source_data = model.item(0, 0).text()
+                target_data = item.text()
+                self.switch_item(target_data, source_data)
+                source.switch_item(source_data, target_data)
+
+                return
+            if modified:
+                event.accept()
+                event = new_ev
+            super().dropEvent(event)
+
+            if event.isAccepted() and type(source) == GroupTable:
+                before = source.rowCount()
+                source.setRowCount(source.team_count)
+            #    print('%r -> %r', (before, source.rowCount()))
+            #else:
+            #    print(type(source), event.isAccepted())
+
+        else:
+            event.ignore()
+
+    def modify_event(self, event, index):
+        rect = self.visualRect(index)
+        margin = 2
+        if event.pos().y() - rect.top() <= margin or rect.bottom() - event.pos().y() <= margin:
+            return QDropEvent(QPoint(event.pos().x(), rect.center().y()), event.dropAction(), event.mimeData(),
+                              event.mouseButtons(), event.keyboardModifiers(),
+                              event.type()), True
+        return event, False
 
 
 #  ----------------------------------------------------------------------------
