@@ -1,11 +1,9 @@
 import math
-from PyQt5.QtCore import QSortFilterProxyModel, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon, QPainter, QPixmap, QColor, QImage
-from PyQt5.QtWidgets import QWizard, QWizardPage, QComboBox, QLabel, QLineEdit, QSpinBox, QFormLayout, \
-    QStyle, QListWidgetItem, QListWidget, \
-    QCompleter, QSizePolicy, QGridLayout
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QIcon,  QColor
+from PyQt5.QtWidgets import QWizard, QWizardPage, QComboBox, QLabel, QLineEdit, QSpinBox, QFormLayout,  QGridLayout
 
-from widgets import FilteringComboBox
+from widgets import TeamSelectorWidget
 
 
 class TournamentWizard(QWizard):
@@ -19,7 +17,7 @@ class TournamentWizard(QWizard):
         self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold; '
                            'color: rgb(255,255,255)')
         self.resize(700, 700)
-        self.namePage = NamePage([t['name'] for t in teams], parent=self)
+        self.namePage = NamePage(teams, parent=self)
         self.tournamentSettingsPage = TournamentSettingsPage(self)
         self.addPage(self.namePage)
         self.addPage(self.tournamentSettingsPage)
@@ -52,10 +50,8 @@ class NamePage(QWizardPage):
         self.spinBox.setMinimum(4)
         self.spinBox.setValue(16)
         self.spinBox.valueChanged.connect(self.num_teams_changed)
-
-        self.teamTable = QListWidget(self)
-
-        self.teams = teams
+        self.teamTable = TeamSelectorWidget(self)
+        self.teamTable.set_teams(db_teams=teams, count=self.spinBox.value())
 
         layout = QGridLayout()
         layout.addWidget(QLabel('Tournament Name:'), 0, 0)
@@ -72,45 +68,11 @@ class NamePage(QWizardPage):
 
     def num_teams_changed(self):
         while self.spinBox.value() > self.teamTable.count():
-            item = QListWidgetItem(self.teamTable)
-            team_item = FilteringComboBox(self)
-            team_item.currentTextChanged.connect(self.team_selected)
-            px = QPixmap(16, 16)
-            px.fill(QColor(0, 0, 0, 0))
-            painter = QPainter()
-            painter.begin(px)
-            painter.drawText(0, 0, 16, 16, Qt.AlignRight | Qt.AlignVCenter, str(self.teamTable.count()))
-            painter.end()
-            item.setIcon(QIcon(px))
-            self.teamTable.addItem(item)
-            self.teamTable.setItemWidget(item, team_item)
-            item.setSizeHint(team_item.sizeHint())
+            self.teamTable.add_team_item()
         while self.spinBox.value() < self.teamTable.count():
-            self.teamTable.takeItem(self.teamTable.count()-1)
-        self.team_selected()
+            self.teamTable.remove_last_team_item()
+        self.teamTable.team_selected()
         self.team_num_changed_signal.emit(self.spinBox.value())
-
-    def team_selected(self):
-        selections = {}
-        for i in range(0, self.teamTable.count()):
-            item = self.teamTable.itemWidget(self.teamTable.item(i))
-
-            item.blockSignals(True)
-            if item.currentText() in selections.values() and item.currentText() != '':
-                selections[item] = item.currentText()+' (2)'
-            else:
-                selections[item] = item.currentText()
-            item.clear()
-            item.blockSignals(False)
-        for i in range(0, self.teamTable.count()):
-            item = self.teamTable.itemWidget(self.teamTable.item(i))
-            item.blockSignals(True)
-            item.addItem('')
-            for t in self.teams:
-                if t not in selections.values() or selections[item] == t:
-                    item.addItem(t)
-            item.setCurrentText(selections[item])
-            item.blockSignals(False)
 
 
 class TournamentSettingsPage(QWizardPage):

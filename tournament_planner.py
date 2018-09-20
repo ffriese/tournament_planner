@@ -1,8 +1,8 @@
 import sys
 
-from PyQt5.QtCore import pyqtSignal, QDir, QCoreApplication
+from PyQt5.QtCore import pyqtSignal, QDir, QCoreApplication, Qt
 
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow, QToolBar
 from PyQt5.QtGui import QIcon, QImage
 
 from widgets import TournamentWidget
@@ -23,29 +23,30 @@ class App(QMainWindow):
         self.setGeometry(self.left, self.top, self.width, self.height)
         self.setWindowTitle(self.title)
         self.setWindowIcon(QIcon('icons/favicon.ico'))
-        self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold; color: white;')
-
-        self.toolbar = self.addToolBar("Main")
+        self.setStyleSheet('background-color: rgb(51,124,99); font-family: Helvetica; font-weight: bold; '
+                           'color: white')
+        self.toolbar = QToolBar("Main")
+        self.addToolBar(Qt.BottomToolBarArea, self.toolbar)
         self.homeAction = self.toolbar.addAction(QIcon('icons/house.png'), 'Home')
         # self.homeMenu = self.menuBar().addMenu('Home')
         # self.testAction = self.homeMenu.addAction('test')
-        #self.homeAction = self.menuBar().addAction('Home')
+        # self.homeAction = self.menuBar().addAction('Home')
         self.homeAction.triggered.connect(self.go_home)
         self.fetch_data()
         self.homeWidget = HomeWidget(self.data)
-        self.tournamentWidget = TournamentWidget()
+        self.tournamentWidget = TournamentWidget(self.database, self)
         self.setCentralWidget(self.homeWidget)
 
         self.homeWidget.tournament_opened.connect(self.open_tournament)
         self.homeWidget.tournament_created.connect(self.create_tournament)
 
-        directory = QDir('icons')
-        files = directory.entryList(["*.png"])
-        for file in files:
-            #print(file)
-            image = QImage()
-            image.load(QCoreApplication.applicationDirPath() + "/icons/" + file)
-            image.save(QCoreApplication.applicationDirPath() + "/icons/" + file)
+        #directory = QDir('icons')
+        #files = directory.entryList(["*.png"])
+        #for file in files:
+        #    #print(file)
+        #    image = QImage()
+        #    image.load("icons/" + file)
+        #    image.save("icons/" + file)
 
         self.show()
 

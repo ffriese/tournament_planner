@@ -1,6 +1,7 @@
 import math
 from enum import Enum
 
+from PyQt5.QtCore import QVariant
 from PyQt5.QtSql import QSqlQuery, QSqlDatabase
 
 
@@ -12,10 +13,19 @@ class TournamentStageStatus(Enum):
 
 class DBException(Exception):
     def __init__(self, query):
-        exec_q = query.executedQuery()
-        for key in query.boundValues().keys():
-            exec_q = exec_q.replace(key, str(query.boundValue(key)))
-        super().__init__('%s -> %s' % (exec_q, query.lastError().text()))
+        super().__init__(query.lastError().text())
+        self.query = query
+
+    def get_last_query(self):
+        exec_q = self.query.executedQuery()
+        for key in self.query.boundValues().keys():
+            exec_q = exec_q.replace(key, str(self.query.boundValue(key)))
+        return exec_q
+
+
+class InsertNotUniqueException(DBException):
+    def __init__(self, query):
+        super().__init__(query)
 
 
 class DataBaseManager:
@@ -101,7 +111,10 @@ class DataBaseManager:
     @staticmethod
     def execute_query(query):
         if not query.exec_():
-            raise DBException(query)
+            if query.lastError().text().startswith('UNIQUE constraint failed'):
+                raise InsertNotUniqueException(query)
+            else:
+                raise DBException(query)
 
     @staticmethod
     def simple_get(query, key):
@@ -138,6 +151,39 @@ class DataBaseManager:
         except DBException as ex:
             print('db_error:', ex)
             return None
+        finally:
+            self.db.close()
+
+    def update_tournament_teams(self, tournament_id, teams):
+        self.db.open()
+        self.db.transaction()
+        try:
+            query = QSqlQuery()
+            # add all new teams to database
+            query.prepare('INSERT INTO Teams(name) VALUES (:name)')
+            ids = []
+            for team in teams:
+                try:
+                    ids.append(team['id'])
+                except KeyError:
+                    # team needs to be added
+                    query.bindValue(':name', team['name'])
+                    self.execute_query(query)
+                    ids.append(self.get_current_id('Teams'))
+            # delete all teams from Tournament_Teams table
+            query.prepare('DELETE FROM Tournament_Teams WHERE tournament==:tournament_id')
+            query.bindValue(':tournament_id', tournament_id)
+            self.execute_query(query)
+            # add all new teams
+            query.prepare('INSERT INTO Tournament_Teams(tournament, team) VALUES (:tournament_id, :team_id)')
+            query.bindValue(':tournament_id', [QVariant(tournament_id) for t in ids])
+            query.bindValue(':team_id', [QVariant(t) for t in ids])
+            query.execBatch(mode=QSqlQuery.ValuesAsRows)
+
+            self.db.commit()
+        except DBException as ex:
+            print('db_error:', ex)
+            self.db.rollback()
         finally:
             self.db.close()
 
@@ -251,6 +297,16 @@ class DataBaseManager:
             query.prepare('SELECT * FROM Tournament_Teams JOIN Teams ON Tournament_Teams.team = Teams.id '
                           'WHERE Tournament_Teams.tournament == :t_id')
             query.bindValue(':t_id', tournament_id)
+            self.execute_query(query)
+            return self.simple_get_multiple(query, ['id', 'name'])
+        finally:
+            self.db.close()
+
+    def get_teams(self):
+        self.db.open()
+        query = QSqlQuery()
+        try:
+            query.prepare('SELECT * FROM Teams')
             self.execute_query(query)
             return self.simple_get_multiple(query, ['id', 'name'])
         finally:
