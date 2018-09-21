@@ -273,14 +273,17 @@ class DataBaseManager:
             tournament_teams = query.value('tournament_teams')
             teams_in_groups = query.value('teams_in_groups')
 
-            current_stage = 0
-
             if expected_teams > tournament_teams:
-                return {'current_stage': current_stage,
+                return {'current_stage': 0,
                         'status': TournamentStageStatus.INITIALIZED}
             elif tournament_teams > teams_in_groups:
-                return {'current_stage': current_stage,
+                return {'current_stage': 0,
                         'status': TournamentStageStatus.IN_PROGRESS}
+
+            current_status = {
+                'current_stage': 0,
+                'status': TournamentStageStatus.COMPLETE
+            }
 
             query.prepare('SELECT id, tournament, stage_index, name, expected_matches'
                           ', COALESCE(pr_count, 0) as matches_in_progress, COALESCE(count, 0) as complete_matches, '
@@ -330,15 +333,42 @@ class DataBaseManager:
                 for key in keys:
                     d[key] = query.value(key)
                 stages.append(d)
-            print(stages)
-            for stage in stages:
-                current_stage += 1
-                if stage['stage_status'] < 2:
-                    return {'current_stage': current_stage,
-                            'status': TournamentStageStatus(stage['stage_status'] + 1)}
 
-            return {'current_stage': -1,  # TOURNAMENT COMPLETE!!
-                    'status': TournamentStageStatus.COMPLETE}
+            def prev_stage_complete(curr_stage, curr_status):
+                if curr_status['current_stage'] == curr_stage or \
+                    (curr_status['current_stage'] == curr_stage - 1 and
+                     curr_status['status'] == TournamentStageStatus.COMPLETE):
+                    return True
+                return False
+
+            stage_index = 0
+
+            for stage in stages:
+                stage_index += 1
+                matchsum = stage['scheduled_matches'] + stage['matches_in_progress'] + stage['complete_matches']
+                if stage['expected_matches'] > 0:
+                    if stage['expected_matches'] == stage['complete_matches']:
+                        current_status = {
+                            'current_stage': stage_index,
+                            'status': TournamentStageStatus.COMPLETE
+                        }
+                        print('stage', stage_index, 'complete')
+                    elif stage['expected_matches'] == matchsum and stage['matches_in_progress'] > 0:
+                        current_status = {
+                            'current_stage': stage_index,
+                            'status': TournamentStageStatus.IN_PROGRESS
+                        }
+                        print('stage', stage_index, 'in progress')
+                    elif stage['scheduled_matches'] == stage['expected_matches'] and \
+                            prev_stage_complete(stage_index, current_status):
+                        current_status = {
+                            'current_stage': stage_index,
+                            'status': TournamentStageStatus.INITIALIZED
+                        }
+                        print('stage', stage_index, 'initialized')
+                    else:
+                        print('stage', stage_index, 'pending')
+            return current_status
         finally:
             self.db.close()
 
