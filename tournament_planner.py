@@ -58,10 +58,6 @@ class App(QMainWindow):
         self.setCentralWidget(widget)
 
     def go_home(self):
-        # if type(self.centralWidget()) == HomeWidget:
-        #    self.switch_central_widget(self.tournamentWidget)
-        # else:
-
         self.switch_central_widget(self.homeWidget)
 
     def open_tournament(self, tournament):

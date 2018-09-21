@@ -6,7 +6,7 @@ from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QDropEvent, QSt
     QDragLeaveEvent, QDragEnterEvent
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QSizePolicy, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
-    QCompleter, QStyleOption, QStyle, QAbstractItemView
+    QCompleter, QStyleOption, QStyle, QAbstractItemView, QItemDelegate, QSpinBox
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -61,7 +61,9 @@ class TournamentWidget(QWidget):
     def __init__(self, database, parent=None):
         super().__init__(parent=parent)
         self.database = database
+        self.db_teams = None
         self.tournament = None
+        self.t_teams = None
         self.layout = QVBoxLayout()
         self.layout.setSpacing(0)
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -85,11 +87,13 @@ class TournamentWidget(QWidget):
         self.widgets = {
             'groups': GroupStageWidget(self),
             'manage_teams': ManageTeamsWidget(self),
-            'draw_groups': GroupDrawWidget(self)
+            'draw_groups': GroupDrawWidget(self),
+            'generate_matches': GenerateMatchesWidget(self)
         }
         for widget_name in self.widgets:
             self.layout.addWidget(self.widgets[widget_name])
         self.widgets['manage_teams'].teams_changed.connect(self.update_tournament_teams)
+        self.widgets['draw_groups'].groups_drawn.connect(self.update_tournament_groups)
         self.main_widget.button_clicked.connect(self.react_to_button)
         self.show_main_page()
 
@@ -106,6 +110,7 @@ class TournamentWidget(QWidget):
             self.widgets[widget_name].show()
 
     def set_tournament(self, tournament, db_teams=None, t_teams=None, groups=None, status=None):
+        print(status)
         self.tournament = tournament
         self.setStyleSheet(tournament['stylesheet'])
         self.nameLabel.setText(tournament['name'])
@@ -113,6 +118,8 @@ class TournamentWidget(QWidget):
             db_teams = []
         if t_teams is None:
             t_teams = []
+        self.db_teams = db_teams
+        self.t_teams = t_teams
         if groups is not None:
             self.widgets['groups'].set_groups(groups)
             self.widgets['draw_groups'].set_groups_and_teams(groups, t_teams)
@@ -120,15 +127,23 @@ class TournamentWidget(QWidget):
         if status is not None:
             self.main_widget.set_status(status)
 
+    def update_tournament(self):
+        db_teams = self.database.get_teams()
+        t_teams = self.database.get_tournament_teams(self.tournament['id'])
+        groups = self.database.get_tournament_groups(self.tournament['id'])
+        status = self.database.get_tournament_status(self.tournament['id'])
+        self.set_tournament(self.tournament, db_teams=db_teams,
+                            t_teams=t_teams, groups=groups, status=status)
+
     def update_tournament_teams(self, teams, changed=False):
         if changed:
             self.database.update_tournament_teams(self.tournament['id'], teams)
-            db_teams = self.database.get_teams()
-            t_teams = self.database.get_tournament_teams(self.tournament['id'])
-            groups = self.database.get_tournament_groups(self.tournament['id'])
-            status = self.database.get_tournament_status(self.tournament['id'])
-            self.set_tournament(self.tournament, db_teams=db_teams,
-                                t_teams=t_teams, groups=groups, status=status)
+            self.update_tournament()
+        self.show_main_page()
+
+    def update_tournament_groups(self, groups):
+        self.database.update_tournament_groups(self.tournament['id'], groups)
+        self.update_tournament()
         self.show_main_page()
 
 
@@ -341,6 +356,8 @@ class TeamSelectorWidget(QListWidget):
 
 
 class GroupDrawWidget(QWidget):
+    groups_drawn = pyqtSignal(list)
+
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.v_layout = QVBoxLayout()
@@ -348,56 +365,47 @@ class GroupDrawWidget(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.group_stage_widget = GroupStageWidget(parent=self, enable_drag_drop=True)
         self.team_list_widget = TeamDrawListWidget()
+        self.team_list_widget.list_empty_changed.connect(self.list_empty_changed)
         self.layout.addWidget(self.group_stage_widget)
         self.layout.addWidget(self.team_list_widget)
         self.v_layout.addLayout(self.layout)
         self.accept_button = QPushButton('Accept')
-        self.accept_button.clicked.connect(self.test)
+        self.accept_button.clicked.connect(self.accepted)
+        self.accept_button.setEnabled(False)
         self.v_layout.addWidget(self.accept_button)
         self.setLayout(self.v_layout)
+        self.t_teams = {}
+        self.groups = {}
 
-    def test(self):
-        self.group_stage_widget.get_groups()
+    def accepted(self):
+        groups = self.group_stage_widget.get_groups()
+        for group in groups:
+            teams = group['teams']
+            team_ids = [self.t_teams[team] for team in teams]
+            group['teams'] = team_ids
+            group['id'] = self.groups[group['name']]
+        self.groups_drawn.emit(groups)
+
+    def list_empty_changed(self, empty):
+        self.accept_button.setEnabled(empty)
 
     def set_groups_and_teams(self, groups, t_teams):
         self.group_stage_widget.set_groups(groups, teams_only=True)
+        self.t_teams = {}
+        self.groups = {}
         self.team_list_widget.clear()
         for t in t_teams:
+            self.t_teams[t['name']] = t['id']
             item = QListWidgetItem(t['name'])
             self.team_list_widget.addItem(item)
+        for g in groups:
+            self.groups[g['name']] = g['id']
 
     def paintEvent(self, q_paint_event):
         opt = QStyleOption()
         opt.initFrom(self.parent())
         p = QPainter(self)
         self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
-
-
-class TeamDrawListWidget(QListWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent=parent)
-        self.setDragDropMode(QAbstractItemView.DragDrop)
-        self.setDefaultDropAction(Qt.MoveAction)
-
-    def dropEvent(self, event: QDropEvent):
-        model = QStandardItemModel()
-        model.dropMimeData(event.mimeData(), Qt.CopyAction, 0, 0, QModelIndex())
-        drop_data = model.item(0, 0).text()
-        if drop_data == '':
-            event.ignore()
-            return
-        source = event.source()
-
-        super().dropEvent(event)
-        if event.isAccepted() and type(source) == GroupTable:
-            source.setRowCount(source.team_count + 1)
-
-    def switch_item(self, original, new):
-        for i in range(self.count()):
-            if self.item(i) is not None and self.item(i).text() == original:
-                self.item(i).setText(new)
-                return True
-        return False
 
 
 class GroupStageWidget(QWidget):
@@ -432,7 +440,7 @@ class GroupStageWidget(QWidget):
                 tw.table.setDefaultDropAction(Qt.MoveAction)
                 tw.table.setDragDropMode(QAbstractItemView.DragDrop)
                 tw.table.setDragDropOverwriteMode(False)
-                #tw.table.setDropIndicatorShown(False)
+                tw.table.setDropIndicatorShown(False)
             self.group_widgets.append(tw)
             self.flow_layout.addWidget(tw)
 
@@ -444,8 +452,9 @@ class GroupStageWidget(QWidget):
                 item = w.table.item(r, 0)
                 if item is not None:
                     group.append(item.text())
-            groups.append({'name': w.table.model().headerData(0, Qt.Horizontal), 'teams': group})
-        print(groups)
+            groups.append({'name': w.table.model().headerData(0, Qt.Horizontal),
+                           'teams': group, 'rounds': w.table.roundSpinBox.value()})
+        return groups
 
     def add_matches(self, matches):
         pass
@@ -473,6 +482,7 @@ class GroupTable(QTableWidget):
         self.verticalHeader().sectionPressed.disconnect()
         self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.setFocusPolicy(Qt.NoFocus)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         if not self.teams_only:
             self.setColumnCount(5)
             self.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
@@ -484,6 +494,9 @@ class GroupTable(QTableWidget):
             self.setMinimumSize(size)
             self.setMaximumSize(size)
         else:
+            self.roundSpinBox = QSpinBox(self)
+            self.roundSpinBox.setMinimum(1)
+            self.roundSpinBox.setToolTip('Number of rounds for this group')
             self.setColumnCount(1)
             self.setHorizontalHeaderLabels([group['name']])  #
             size = QSize(250 + 13, 20 * group['size'] + 22)
@@ -501,10 +514,13 @@ class GroupTable(QTableWidget):
                 self.setItem(row, 2, QTableWidgetItem(str(team['won'])))
                 self.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
                 self.setItem(row, 4, QTableWidgetItem('%r:%r' % (team['score'], team['conceded'])))
-            for c in range(self.columnCount()):
-                self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsEditable)
-                self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsSelectable)
             row += 1
+        for r in range(self.rowCount()):
+            for c in range(self.columnCount()):
+                if self.item(r, c) is None:
+                    self.setItem(r, c, QTableWidgetItem())
+                self.item(r, c).setFlags(self.item(r, c).flags() ^ Qt.ItemIsEditable)
+                self.item(r, c).setFlags(self.item(r, c).flags() ^ Qt.ItemIsSelectable)
 
     def switch_item(self, original, new):
         for i in range(self.rowCount()):
@@ -513,51 +529,93 @@ class GroupTable(QTableWidget):
                 return True
         return False
 
+    def remove_item_by_text(self, text):
+        for i in range(self.team_count):
+            if self.item(i, 0) is not None:
+                if self.item(i, 0).text() == text:
+                    self.setItem(i, 0, QTableWidgetItem())
+                    self.item(i, 0).setFlags(self.item(i, 0).flags() ^ Qt.ItemIsEditable)
+                    self.item(i, 0).setFlags(self.item(i, 0).flags() ^ Qt.ItemIsSelectable)
+
     def dropEvent(self, event: QDropEvent):
         model = QStandardItemModel()
         model.dropMimeData(event.mimeData(), Qt.CopyAction, 0, 0, QModelIndex())
-        #
         source = event.source()
-        #if source == self:
-        #    event.ignore()
-        #    return
         index = self.indexAt(event.pos())
         row = index.row()
         if index.isValid() and self.team_count >= row+1:
-            new_ev, modified = self.modify_event(event, index)
-            item = self.item(row, 0)
-            if item is not None and item.text() != '':
-                # swap
+            target_item = self.item(row, 0)
+            if target_item is not None and target_item.text() != '':
                 event.ignore()
+                # swap manually
                 source_data = model.item(0, 0).text()
-                target_data = item.text()
+                target_data = target_item.text()
                 self.switch_item(target_data, source_data)
                 source.switch_item(source_data, target_data)
-
-                return
-            if modified:
-                event.accept()
-                event = new_ev
-            super().dropEvent(event)
-
-            if event.isAccepted() and type(source) == GroupTable:
-                before = source.rowCount()
-                source.setRowCount(source.team_count +1)
-            #    print('%r -> %r', (before, source.rowCount()))
-            #else:
-            #    print(type(source), event.isAccepted())
+            else:
+                if type(source) == GroupTable or type(source) == TeamDrawListWidget:
+                    # manually remove item from source
+                    source.remove_item_by_text(model.item(0, 0).text())
+                else:
+                    # remove item from source
+                    event.acceptProposedAction()
+                # manually add item to target table (self)
+                self.setItem(row, 0, QTableWidgetItem(model.item(0, 0).text()))
 
         else:
             event.ignore()
+        self.clearSelection()
+        self.clearFocus()
+        source.clearSelection()
+        source.clearFocus()
 
-    def modify_event(self, event, index):
-        rect = self.visualRect(index)
-        margin = 2
-        if event.pos().y() - rect.top() <= margin or rect.bottom() - event.pos().y() <= margin:
-            return QDropEvent(QPoint(event.pos().x(), rect.center().y()), event.dropAction(), event.mimeData(),
-                              event.mouseButtons(), event.keyboardModifiers(),
-                              event.type()), True
-        return event, False
+
+class TeamDrawListWidget(QListWidget):
+    list_empty_changed = pyqtSignal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+
+    def dropEvent(self, event: QDropEvent):
+        model = QStandardItemModel()
+        model.dropMimeData(event.mimeData(), Qt.CopyAction, 0, 0, QModelIndex())
+        drop_data = model.item(0, 0).text()
+        if drop_data == '':
+            event.ignore()
+        else:
+            source = event.source()
+            if type(source) == GroupTable:
+                self.addItem(drop_data)
+                source.remove_item_by_text(drop_data)
+                self.list_empty_changed.emit(False)
+            self.clearSelection()
+            self.clearFocus()
+            source.clearSelection()
+            source.clearFocus()
+
+    def remove_item_by_text(self, text):
+        item_to_remove = None
+        for i in range(self.count()):
+            if self.item(i) is not None:
+                if self.item(i).text() == text:
+                    item_to_remove = i
+        if item_to_remove is not None:
+            self.takeItem(item_to_remove)
+        if self.count() == 0:
+            self.list_empty_changed.emit(True)
+
+    def switch_item(self, original, new):
+        for i in range(self.count()):
+            if self.item(i) is not None and self.item(i).text() == original:
+                self.item(i).setText(new)
+                return True
+        return False
+
+
+class GenerateMatchesWidget(QWidget):
+    pass
 
 
 #  ----------------------------------------------------------------------------
