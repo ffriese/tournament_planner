@@ -506,19 +506,30 @@ class GroupTable(QTableWidget):
             self.setColumnWidth(2, 20)
             self.setColumnWidth(3, 20)
             self.setColumnWidth(4, 40)
-            size = QSize(250 + 20 + 20 + 20 + 40 + 13, 20 * group['size'] + 22)
-            self.setMinimumSize(size)
-            self.setMaximumSize(size)
+            #size = QSize(250 + 20 + 20 + 20 + 40 + 13, 20 * group['size'] + 22)
+            #self.setMinimumSize(size)
+            #self.setMaximumSize(size)
         else:
             self.roundSpinBox = QSpinBox(self)
             self.roundSpinBox.setMinimum(1)
             self.roundSpinBox.setToolTip('Number of rounds for this group')
             self.setColumnCount(1)
             self.setHorizontalHeaderLabels([group['name']])  #
-            size = QSize(250 + 13, 20 * group['size'] + 22)
-            self.setMinimumSize(size)
-            self.setMaximumSize(size)
+            #size = QSize(250 + 13, 20 * group['size'] + 22)
+            #self.setMinimumSize(size)
+            #self.setMaximumSize(size)
         self.setColumnWidth(0, 250)
+
+        width = (self.model().columnCount() - 1) + self.verticalHeader().width()
+        height = (self.model().rowCount() - 1) + self.horizontalHeader().height()
+        for column in range(self.model().columnCount()):
+            width += self.columnWidth(column)
+        for row in range(self.model().rowCount()):
+            height += self.rowHeight(row)
+        self.setMinimumWidth(width)
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
+
         row = 0
         for team in group['teams']:
             icon_path = 'icons/%s.png' % team['name']
