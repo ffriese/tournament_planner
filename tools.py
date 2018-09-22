@@ -28,6 +28,38 @@ class InsertNotUniqueException(DBException):
         super().__init__(query)
 
 
+# taken from ih84ds:
+# https://gist.github.com/ih84ds/be485a92f334c293ce4f1c84bfba54c9
+def create_balanced_round_robin(list):
+    """ Create a schedule for the teams in the list and return it"""
+    s = []
+    if len(list) % 2 == 1: list = list + ["BYE"]
+    # manipulate map (array of indexes for list) instead of list itself
+    # this takes advantage of even/odd indexes to determine home vs. away
+    map = [i for i in range(len(list))]
+    mid = int(len(map) / 2)
+    for i in range(len(map) - 1):
+        l1 = map[:mid]
+        l2 = map[mid:]
+        l2.reverse()
+        round = []
+        for match in zip(l1, l2):
+            # team 1 is team with lower index
+            t1 = list[min(match)]
+            # team 2 is team with higher index
+            t2 = list[max(match)]
+            # this will equalize home/away for each team +/- 1
+            swap = ((match[0] + match[1]) % 2) == 1
+            if swap:
+                round.append((t2, t1))
+            else:
+                round.append((t1, t2))
+        s.append(round)
+        # rotate list, except for first element
+        map.insert(1, map.pop())
+    return s
+
+
 class DataBaseManager:
     def __init__(self):
         self.db = QSqlDatabase.addDatabase('QSQLITE')
@@ -56,6 +88,13 @@ class DataBaseManager:
                             'team INTEGER,'
                             'FOREIGN KEY (tournament) REFERENCES Tournaments(id) ON DELETE CASCADE,'
                             'FOREIGN KEY (team) REFERENCES Teams(id)'
+                            ')')
+
+                query.exec_('CREATE TABLE Tournament_Fields ('
+                            'id INTEGER PRIMARY KEY AUTOINCREMENT ,'
+                            'tournament INTEGER,'
+                            'name VARCHAR(30),'
+                            'FOREIGN KEY (tournament) REFERENCES Tournaments(id) ON DELETE CASCADE'
                             ')')
 
                 query.exec_('CREATE TABLE Tournament_Stages ('
@@ -100,9 +139,11 @@ class DataBaseManager:
                             'team1_score INTEGER,'
                             'team2_score INTEGER,'
                             'status INTEGER,'
-                            'tournament_stage INTEGER,'
+                            'tournament_stage INTEGER, '
+                            'field INTEGER,'
                             'FOREIGN KEY(team1) REFERENCES Teams(id),'
                             'FOREIGN KEY(team2) REFERENCES Teams(id),'
+                            'FOREIGN KEY(field) REFERENCES Tournament_Fields(id),'
                             'FOREIGN KEY(tournament_stage) REFERENCES Tournament_Stages(id) ON DELETE CASCADE'
                             ')')
         finally:
@@ -110,14 +151,13 @@ class DataBaseManager:
 
     @staticmethod
     def execute_query(query, batch=False):
-        if batch:
-            exe = query.execBatch
-            kwargs = {'mode': QSqlQuery.ValuesAsRows}
-        else:
-            exe = query.exec_
-            kwargs = {}
+        def execute():
+            if batch:
+                return query.execBatch(mode=QSqlQuery.ValuesAsRows)
+            else:
+                return query.exec_()
 
-        if not exe(**kwargs):
+        if not execute():
             if query.lastError().text().startswith('UNIQUE constraint failed'):
                 raise InsertNotUniqueException(query)
             else:
@@ -193,6 +233,64 @@ class DataBaseManager:
                 self.execute_query(query)
             self.db.commit()
 
+        except DBException as ex:
+            print('db_error:', ex)
+            self.db.rollback()
+        finally:
+            self.db.close()
+
+    def generate_matches(self, tournament_id, data):
+        print('database got generate-request', tournament_id, data)
+        self.db.open()
+        self.db.transaction()
+        try:
+            query = QSqlQuery()
+            if data['status'] == TournamentStageStatus.COMPLETE:
+                if data['next_stage'] is None:
+                    raise AssertionError('TOURNAMENT COMPLETE, THIS SHOULD NEVER HAPPEN ANYHOW')
+                elif data['next_stage']['name'] == 'GROUP':
+                    # TODO: DO CRAZY GROUP STUFF!!
+                    # 1) get all group ids and rounds
+                    query.prepare('SELECT id, rounds, name FROM Groups WHERE group_stage == :gs_id')
+                    query.bindValue(':gs_id', data['next_stage']['id'])
+                    self.execute_query(query)
+                    groups = self.simple_get_multiple(query, ['id', 'rounds', 'name'])
+                    # 2) for each group, generate matches
+                    schedule = []
+                    for group in groups:
+                        # 2.1) get teams
+                        query.prepare('SELECT team as id, name FROM Group_Teams JOIN Teams '
+                                      'ON Group_Teams.team==Teams.id WHERE group_id == :g_id')
+                        query.bindValue(':g_id', group['id'])
+                        self.execute_query(query)
+                        teams = self.simple_get_multiple(query, ['id', 'name'])
+                        # 2.2) for each round generate matches
+                        # 2.2.1) generate a single round of matches
+                        sched = create_balanced_round_robin(teams)
+                        for round in range(group['rounds']):
+                            for game_day in sched:
+                                for m in game_day:
+                                    if m[0] != 'BYE' and m[1] != 'BYE':
+                                        schedule.append({'team1_id': m[0]['id'],
+                                                                        'team2_id': m[1]['id']})
+                        #                print(m)
+                        # print('------------------------------')
+                    print(schedule)
+                    query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
+                                  'VALUES (:t1, :t2, 0, :ts_id)')
+                    query.bindValue(':t1', [QVariant(m['team1_id']) for m in schedule])
+                    query.bindValue(':t2', [QVariant(m['team2_id']) for m in schedule])
+                    query.bindValue(':ts_id', [QVariant(data['next_stage']['id']) for m in schedule])
+                    self.execute_query(query, batch=True)
+                else:
+                    # TODO: DO CRAZY KO-STAGE STUFF
+                    pass
+            elif data['status'] == TournamentStageStatus.INITIALIZED:
+                # TODO: REGENERATE, FOR THIS WE WILL NEED TO AMEND THE CURRENT_STAGE-INFORMATION
+                pass
+            else:
+                raise AssertionError('STAGE ALREADY IN PROGRESS, THIS SHOULD NEVER HAPPEN ANYHOW')
+            self.db.commit()
         except DBException as ex:
             print('db_error:', ex)
             self.db.rollback()
@@ -275,15 +373,12 @@ class DataBaseManager:
 
             if expected_teams > tournament_teams:
                 return {'current_stage': 0,
+                        'name': 'SETUP',
                         'status': TournamentStageStatus.INITIALIZED}
             elif tournament_teams > teams_in_groups:
                 return {'current_stage': 0,
+                        'name': 'SETUP',
                         'status': TournamentStageStatus.IN_PROGRESS}
-
-            current_status = {
-                'current_stage': 0,
-                'status': TournamentStageStatus.COMPLETE
-            }
 
             query.prepare('SELECT id, tournament, stage_index, name, expected_matches'
                           ', COALESCE(pr_count, 0) as matches_in_progress, COALESCE(count, 0) as complete_matches, '
@@ -334,6 +429,20 @@ class DataBaseManager:
                     d[key] = query.value(key)
                 stages.append(d)
 
+            def get_next_stage(curr_stage):
+                try:
+                    return {'id': stages[curr_stage]['id'],
+                            'name': stages[curr_stage]['name']}
+                except IndexError:
+                    return None
+
+            current_status = {
+                'current_stage': 0,
+                'name': 'SETUP',
+                'status': TournamentStageStatus.COMPLETE,
+                'next_stage': get_next_stage(0)
+            }
+
             def prev_stage_complete(curr_stage, curr_status):
                 if curr_status['current_stage'] == curr_stage or \
                     (curr_status['current_stage'] == curr_stage - 1 and
@@ -342,7 +451,6 @@ class DataBaseManager:
                 return False
 
             stage_index = 0
-
             for stage in stages:
                 stage_index += 1
                 matchsum = stage['scheduled_matches'] + stage['matches_in_progress'] + stage['complete_matches']
@@ -350,12 +458,15 @@ class DataBaseManager:
                     if stage['expected_matches'] == stage['complete_matches']:
                         current_status = {
                             'current_stage': stage_index,
-                            'status': TournamentStageStatus.COMPLETE
+                            'name': stage['name'],
+                            'status': TournamentStageStatus.COMPLETE,
+                            'next_stage': get_next_stage(stage_index)
                         }
                         print('stage', stage_index, 'complete')
                     elif stage['expected_matches'] == matchsum and stage['matches_in_progress'] > 0:
                         current_status = {
                             'current_stage': stage_index,
+                            'name': stage['name'],
                             'status': TournamentStageStatus.IN_PROGRESS
                         }
                         print('stage', stage_index, 'in progress')
@@ -363,6 +474,7 @@ class DataBaseManager:
                             prev_stage_complete(stage_index, current_status):
                         current_status = {
                             'current_stage': stage_index,
+                            'name': stage['name'],
                             'status': TournamentStageStatus.INITIALIZED
                         }
                         print('stage', stage_index, 'initialized')
@@ -394,55 +506,54 @@ class DataBaseManager:
         finally:
             self.db.close()
 
-    def get_tournament_groups(self, tournament_id):
+    def get_tournament_groups(self, tournament_id, retrieve_matches=False):
         self.db.open()
         query = QSqlQuery()
-        #query2 = QSqlQuery()
-        query3 = QSqlQuery()
+        group_table_query = QSqlQuery()
+        group_matches_query = QSqlQuery()
         try:
             groups = []
             query.prepare('SELECT id FROM Tournament_Stages WHERE tournament == :id AND stage_index == 1')
             query.bindValue(':id', tournament_id)
 
-            #query2.prepare('SELECT name FROM Teams WHERE id == :t_id')
+            group_table_query.\
+                prepare('SELECT id as team, Teams.name as team_name, COALESCE(Games, 0) as games, '
+                        'COALESCE(Won, 0) as won, '
+                        'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
+                        'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
+                        'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
+                        'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
+                        'SUM(against) as Against FROM ( SELECT team1 as team, '
+                        'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
+                        'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
+                        ' FROM Matches WHERE tournament_stage == :stage_id UNION ALL SELECT team2 as team, '
+                        'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
+                        'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
+                        'FROM Matches WHERE tournament_stage == :stage_id ) t '
+                        'GROUP BY team) as g_table ON Teams.id==g_table.team WHERE Teams.id in '
+                        '(SELECT team FROM Group_Teams WHERE group_id==:g_id) '
+                        ' ORDER By won DESC, diff DESC, score DESC, conceded')
 
-            # query3.prepare('SELECT team, SUM(Win)+SUM(Loss) as games, SUM(Win) As won, SUM(Loss) as lost,'
-            #                'Sum(score)-Sum(against) as diff, SUM(score) as score , SUM(against) as conceded FROM'
-            #                '( SELECT team1 as team,'
-            #                ' CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against,'
-            #                ' CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
-            #                ' FROM Matches WHERE tournament_stage == :stage_id AND team1 in '
-            #                '(SELECT team from Group_Teams WHERE group_id == :g_id)'
-            #                ' UNION ALL'
-            #                ' SELECT team2 as team,'
-            #                ' CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against,'
-            #                ' CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score'
-            #                ' FROM Matches WHERE tournament_stage == :stage_id AND team2 in '
-            #                '(SELECT team from Group_Teams WHERE group_id == :g_id)'
-            #                ') t GROUP BY team'
-            #                ' ORDER By won DESC, diff DESC, score DESC, conceded')
-
-            query3.prepare('SELECT id as team, Teams.name as team_name, COALESCE(Games, 0) as games, '
-                           'COALESCE(Won, 0) as won, '
-                           'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
-                           'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
-                           'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
-                           'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
-                           'SUM(against) as Against FROM ( SELECT team1 as team, '
-                           'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
-                           'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
-                           ' FROM Matches WHERE tournament_stage == :stage_id UNION ALL SELECT team2 as team, '
-                           'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
-                           'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
-                           'FROM Matches WHERE tournament_stage == :stage_id ) t '
-                           'GROUP BY team) as g_table ON Teams.id==g_table.team WHERE Teams.id in '
-                           '(SELECT team FROM Group_Teams WHERE group_id==:g_id) '
-                           ' ORDER By won DESC, diff DESC, score DESC, conceded')
-
+            group_matches_query.\
+                prepare('select Matches.id,'
+                        '   T1.id as team1_id, '
+                        '   T2.id as team2_id, '
+                        '   T1.name as team1, '
+                        '   T2.name as team2, '
+                        '   Matches.team1_score, '
+                        '   Matches.team2_score, '
+                        '   Matches.field,'
+                        '   Matches.status '
+                        ' from Matches'
+                        ' join Teams as T1 on Matches.team1 = T1.id'
+                        ' join Teams as T2 on Matches.team2 = T2.id '
+                        'WHERE tournament_stage == :stage_id and T1.id in '
+                        '(SELECT team FROM Group_Teams WHERE group_id == :g_id)')
             self.execute_query(query)
             stage_id = self.simple_get(query, 'id')
 
-            query3.bindValue(':stage_id', stage_id)
+            group_table_query.bindValue(':stage_id', stage_id)
+            group_matches_query.bindValue(':stage_id', stage_id)
 
             query.prepare('SELECT * FROM Groups WHERE group_stage IN '
                           '(SELECT tournament_stage from Group_Stages WHERE tournament_stage IN '
@@ -450,29 +561,38 @@ class DataBaseManager:
             query.bindValue(':id', tournament_id)
 
             self.execute_query(query)
+            # for each group
             while query.next():
-                query3.bindValue(':g_id', query.record().value('id'))
+                group_table_query.bindValue(':g_id', query.record().value('id'))
                 teams = []
-                self.execute_query(query3)
-                while query3.next():
-                    #query2.bindValue(':t_id', query3.record().value('team'))
-                    #self.execute_query(query2)
-                    #team_name = self.simple_get(query2, 'name')
+                matches = None
+                self.execute_query(group_table_query)
+                # for each team
+                while group_table_query.next():
                     teams.append({
-                        'id': query3.value('team'),
-                        'name': query3.value('team_name'),
-                        'games': query3.value('games'),
-                        'won': query3.value('won'),
-                        'lost': query3.value('lost'),
-                        'diff': query3.value('diff'),
-                        'score': query3.value('score'),
-                        'conceded': query3.value('conceded')
+                        'id': group_table_query.value('team'),
+                        'name': group_table_query.value('team_name'),
+                        'games': group_table_query.value('games'),
+                        'won': group_table_query.value('won'),
+                        'lost': group_table_query.value('lost'),
+                        'diff': group_table_query.value('diff'),
+                        'score': group_table_query.value('score'),
+                        'conceded': group_table_query.value('conceded')
                     })
+                if retrieve_matches:
+                    group_matches_query.bindValue(':g_id', query.record().value('id'))
+                    self.execute_query(group_matches_query)
+                    matches = self.simple_get_multiple(group_matches_query,
+                                                       ['id', 'team1_id', 'team2_id', 'team1', 'team2',
+                                                        'team1_score', 'team2_score',
+                                                        'status', 'field'])
                 group = {
                     'name': query.record().value('name'),
                     'id': query.record().value('id'),
                     'size': query.record().value('size'),
-                    'teams': teams}
+                    'teams': teams,
+                    'matches': matches
+                }
                 groups.append(group)
             return groups
         finally:

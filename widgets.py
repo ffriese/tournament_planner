@@ -94,6 +94,7 @@ class TournamentWidget(QWidget):
             self.layout.addWidget(self.widgets[widget_name])
         self.widgets['manage_teams'].teams_changed.connect(self.update_tournament_teams)
         self.widgets['draw_groups'].groups_drawn.connect(self.update_tournament_groups)
+        self.widgets['generate_matches'].match_generation_requested.connect(self.generate_matches)
         self.main_widget.button_clicked.connect(self.react_to_button)
         self.show_main_page()
 
@@ -124,13 +125,14 @@ class TournamentWidget(QWidget):
             self.widgets['groups'].set_groups(groups)
             self.widgets['draw_groups'].set_groups_and_teams(groups, t_teams)
         self.widgets['manage_teams'].set_teams(t_teams=t_teams, db_teams=db_teams, count=tournament['num_teams'])
+        self.widgets['generate_matches'].set_stage(status)
         if status is not None:
             self.main_widget.set_status(status)
 
     def update_tournament(self):
         db_teams = self.database.get_teams()
         t_teams = self.database.get_tournament_teams(self.tournament['id'])
-        groups = self.database.get_tournament_groups(self.tournament['id'])
+        groups = self.database.get_tournament_groups(self.tournament['id'], retrieve_matches=True)
         status = self.database.get_tournament_status(self.tournament['id'])
         self.set_tournament(self.tournament, db_teams=db_teams,
                             t_teams=t_teams, groups=groups, status=status)
@@ -143,6 +145,11 @@ class TournamentWidget(QWidget):
 
     def update_tournament_groups(self, groups):
         self.database.update_tournament_groups(self.tournament['id'], groups)
+        self.update_tournament()
+        self.show_main_page()
+
+    def generate_matches(self, data):
+        self.database.generate_matches(self.tournament['id'], data)
         self.update_tournament()
         self.show_main_page()
 
@@ -483,7 +490,61 @@ class GroupWidget(QWidget):
         self.setLayout(QVBoxLayout())
         self.teams_only = teams_only
         self.table = GroupTable(group=group, parent=self, teams_only=teams_only)
+        self.match_table = MatchTable(group=group, parent=self)
         self.layout().addWidget(self.table)
+        self.layout().addWidget(self.match_table)
+        # self.match_table.hide()
+
+
+class MatchTable(QTableWidget):
+    def __init__(self, group, parent=None):
+        super().__init__(parent=parent)
+        self.verticalHeader().setDefaultSectionSize(20)
+        self.horizontalHeader().sectionPressed.disconnect()
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.horizontalHeader().hide()
+        self.verticalHeader().sectionPressed.disconnect()
+        self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.verticalHeader().hide()
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.clear()
+        self.setColumnCount(6)
+        self.setShowGrid(False)
+        matches = group['matches'] if group['matches'] is not None else []
+        self.setRowCount(len(matches))
+        row = 0
+        for match in matches:
+            self.setItem(row, 0, QTableWidgetItem(match['team1']))
+            self.item(row, 0).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.setItem(row, 1, QTableWidgetItem('-'))
+            self.setItem(row, 2, QTableWidgetItem(match['team2']))
+            self.setItem(row, 3, QTableWidgetItem(str(match['team1_score'])
+                                                  if str(match['team1_score']) != '' else '-'))
+            self.setItem(row, 4, QTableWidgetItem(':'))
+            self.setItem(row, 5, QTableWidgetItem(str(match['team2_score'])
+                                                  if str(match['team2_score']) != '' else '-'))
+            for c in range(0, 5):
+                self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsSelectable)
+                self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsEditable)
+            row += 1
+        self.setColumnWidth(0, 150)
+        self.setColumnWidth(1, 10)
+        self.setColumnWidth(2, 150)
+        self.setColumnWidth(3, 20)
+        self.setColumnWidth(4, 10)
+        self.setColumnWidth(5, 20)
+        width = 2
+        height = 2
+        # print(height, width, self.model().columnCount(), self.model().rowCount())
+        for column in range(self.model().columnCount()):
+            width += self.columnWidth(column)
+        for row in range(self.model().rowCount()):
+            height += self.rowHeight(row)
+        # print(height, width)
+        self.setMinimumWidth(width)
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
 
 
 class GroupTable(QTableWidget):
@@ -520,12 +581,16 @@ class GroupTable(QTableWidget):
             #self.setMaximumSize(size)
         self.setColumnWidth(0, 250)
 
-        width = (self.model().columnCount() - 1) + self.verticalHeader().width()
-        height = (self.model().rowCount() - 1) + self.horizontalHeader().height()
+        #width = (self.model().columnCount() - 1) + self.verticalHeader().width()
+        #height = (self.model().rowCount() - 1) + self.horizontalHeader().height()
+        width = self.verticalHeader().width() + 2
+        height = self.horizontalHeader().height() + 2
+        #print(height, width, self.model().columnCount(), self.model().rowCount())
         for column in range(self.model().columnCount()):
             width += self.columnWidth(column)
         for row in range(self.model().rowCount()):
             height += self.rowHeight(row)
+        #print(height, width)
         self.setMinimumWidth(width)
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
@@ -668,7 +733,25 @@ class TeamDrawListWidget(QListWidget):
 
 
 class GenerateMatchesWidget(QWidget):
-    pass
+    match_generation_requested = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.stage = None
+        self.generate_button = QPushButton('Generate', parent=self)
+        self.generate_button.clicked.connect(self.generate)
+
+    def paintEvent(self, q_paint_event):
+        opt = QStyleOption()
+        opt.initFrom(self.parent())
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
+
+    def set_stage(self, stage):
+        self.stage = stage
+
+    def generate(self):
+        self.match_generation_requested.emit(self.stage)
 
 
 #  ----------------------------------------------------------------------------
