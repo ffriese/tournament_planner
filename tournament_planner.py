@@ -115,7 +115,7 @@ class HomeWidget(QWidget):
         create_tournament_button.setStyleSheet('background-color: rgb(190, 190, 190); color: rgb(0, 0, 0)')
         create_tournament_button.setIcon(QIcon('icons/application_add'))
         create_tournament_button.clicked.connect(self.show_tournament_wizard)
-        all_time_table_button = QPushButton('All_Time_Table', self)
+        all_time_table_button = QPushButton('All-Time-Table', self)
         all_time_table_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         all_time_table_button.setIcon(QIcon('icons/medal_gold_1.png'))
         all_time_table_button.clicked.connect(self.show_all_time_table)

@@ -8,7 +8,8 @@ from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QDropEvent, QSt
     QDragLeaveEvent, QDragEnterEvent, QStandardItem
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QSizePolicy, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
-    QCompleter, QStyleOption, QStyle, QAbstractItemView, QItemDelegate, QSpinBox, QFrame, QDialog, QFormLayout
+    QCompleter, QStyleOption, QStyle, QAbstractItemView, QItemDelegate, QSpinBox, QFrame, QDialog, QFormLayout, \
+    QRadioButton, QButtonGroup
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -156,7 +157,11 @@ class TournamentWidget(QWidget):
         self.db_teams = db_teams
         self.t_teams = t_teams
         if groups is not None:
-            self.widgets['groups'].set_groups(groups)
+            try:
+                editable = status['name'] == 'GROUP'
+            except KeyError:
+                editable = False
+            self.widgets['groups'].set_groups(groups, editable=editable)
             self.widgets['draw_groups'].set_groups_and_teams(groups, t_teams)
         self.widgets['manage_teams'].set_teams(t_teams=t_teams, db_teams=db_teams, count=tournament['num_teams'])
         self.widgets['generate_matches'].set_stage(status)
@@ -502,7 +507,7 @@ class GroupStageWidget(QWidget):
                 self.flow_layout.itemAt(i).widget().setParent(None)
             self.group_widgets.clear()
             for group in groups:
-                gw = GroupWidget(parent=self, teams_only=teams_only, editable=editable)
+                gw = GroupWidget(parent=self)
                 gw.match_edited.connect(self.match_edited)
                 if self.drag_drop_enabled:
                     gw.table.setDefaultDropAction(Qt.MoveAction)
@@ -513,7 +518,7 @@ class GroupStageWidget(QWidget):
                 self.flow_layout.addWidget(gw)
         i = 0
         for gw in self.group_widgets:
-            gw.set_group(groups[i])
+            gw.set_group(groups[i], teams_only=teams_only, editable=editable)
             i += 1
 
     def get_groups(self):
@@ -538,12 +543,11 @@ class GroupStageWidget(QWidget):
 class GroupWidget(QFrame):
     match_edited = pyqtSignal(dict)
 
-    def __init__(self, parent=None, teams_only=False, editable=False):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.setLayout(QVBoxLayout())
-        self.teams_only = teams_only
-        self.table = GroupTable(parent=self, teams_only=teams_only)
-        self.match_table = MatchTable(editable=editable, parent=self)
+        self.table = GroupTable(parent=self, )
+        self.match_table = MatchTable(parent=self)
         self.match_table.match_edited.connect(self.match_edited)
         self.layout().addWidget(self.table)
         self.layout().addWidget(self.match_table)
@@ -551,15 +555,15 @@ class GroupWidget(QFrame):
         self.setFrameShadow(QFrame.Sunken)
         # self.match_table.hide()
 
-    def set_group(self, group):
-        self.table.set_group(group)
-        self.match_table.set_group(group)
+    def set_group(self, group, teams_only=False, editable=False):
+        self.table.set_group(group, teams_only=teams_only)
+        self.match_table.set_group(group, editable=editable)
 
 
 class MatchTable(QTableWidget):
     match_edited = pyqtSignal(dict)
 
-    def __init__(self, editable=True, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.verticalHeader().setDefaultSectionSize(20)
         self.horizontalHeader().sectionPressed.disconnect()
@@ -570,7 +574,6 @@ class MatchTable(QTableWidget):
         self.verticalHeader().hide()
         self.setFocusPolicy(Qt.NoFocus)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setColumnCount(7 if editable else 6)
         self.setShowGrid(False)
         self.setFrameStyle(QFrame.NoFrame)
         self.dialog = None
@@ -579,21 +582,21 @@ class MatchTable(QTableWidget):
         if '*[highlighted]' in sheet.keys():
             if 'color' in sheet['*[highlighted]'].keys():
                 self.highlight_color = WidgetTools.css_color_to_rgb(sheet['*[highlighted]']['color'])
-        self.editable = editable
 
+    def set_group(self, group, editable=False):
+        matches = group['matches'] if group['matches'] is not None else []
+        self.clear()
+
+        self.setColumnCount(7 if editable else 6)
+        self.setRowCount(len(matches))
         self.setColumnWidth(0, 140 if editable else 150)
         self.setColumnWidth(1, 10)
         self.setColumnWidth(2, 140 if editable else 150)
         self.setColumnWidth(3, 20)
         self.setColumnWidth(4, 10)
         self.setColumnWidth(5, 20)
-        if self.editable:
+        if editable:
             self.setColumnWidth(6, 20)
-
-    def set_group(self, group):
-        matches = group['matches'] if group['matches'] is not None else []
-        self.clear()
-        self.setRowCount(len(matches))
         row = 0
         for match in matches:
             self.setItem(row, 0, QTableWidgetItem(match['team1']))
@@ -610,7 +613,7 @@ class MatchTable(QTableWidget):
             self.item(row, 4).setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
             self.setItem(row, 5, QTableWidgetItem(str(match['team2_score'])
                                                   if str(match['team2_score']) != '' else '-'))
-            if self.editable:
+            if editable:
                 button_widget = QWidget()
                 btn_edit = QPushButton()
                 btn_edit.setIcon(QIcon('icons/pencil.png'))
@@ -646,9 +649,8 @@ class MatchTable(QTableWidget):
 
 
 class GroupTable(QTableWidget):
-    def __init__(self, parent=None, teams_only=False):
+    def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self.teams_only = teams_only
         self.team_count = 0
         self.verticalHeader().setDefaultSectionSize(20)
         self.horizontalHeader().sectionPressed.disconnect()
@@ -660,8 +662,8 @@ class GroupTable(QTableWidget):
         self.setFrameStyle(QFrame.NoFrame)
         self.roundSpinBox = None
 
-    def set_group(self, group):
-        if not self.teams_only:
+    def set_group(self, group, teams_only=False):
+        if not teams_only:
             self.setColumnCount(5)
             self.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
             self.setColumnWidth(1, 20)
@@ -684,7 +686,7 @@ class GroupTable(QTableWidget):
             # if not os.path.isfile(os.path.abspath(icon_path)):
             #    icon_path = 'icons/trophy.png'
             self.setItem(row, 0, QTableWidgetItem(QIcon(icon_path), team['name']))
-            if not self.teams_only:
+            if not teams_only:
                 self.setItem(row, 1, QTableWidgetItem(str(team['games'])))
                 self.setItem(row, 2, QTableWidgetItem(str(team['won'])))
                 self.setItem(row, 3, QTableWidgetItem(str(team['lost'])))
@@ -692,7 +694,7 @@ class GroupTable(QTableWidget):
             row += 1
         for r in range(self.rowCount()):
             for c in range(self.columnCount()):
-                if self.item(r, c) is None or not self.teams_only:
+                if self.item(r, c) is None or not teams_only:
                     if self.item(r, c) is None:
                         self.setItem(r, c, QTableWidgetItem())
                     self.item(r, c).setFlags(self.item(r, c).flags() ^ Qt.ItemIsEditable)
@@ -871,23 +873,31 @@ class EditMatchDialog(QDialog):
         self.t2_spin.setMinimum(0)
         if str(match['team2_score']) != '':
             self.t2_spin.setValue(int(match['team2_score']))
-        self.status_combo = QComboBox(self)
-        self.status_combo.addItem('Scheduled')
-        self.status_combo.addItem('In Progress')
-        self.status_combo.addItem('Finished')
-        self.status_combo.setCurrentIndex(match['status'] + 1 if match['status'] != 2 else match['status'])
+        self.radio_scheduled = QRadioButton('Scheduled', self)
+        self.radio_in_progress = QRadioButton('In Progress', self)
+        self.radio_finished = QRadioButton('Finished', self)
+        self.radios = [self.radio_scheduled, self.radio_in_progress, self.radio_finished]
+        self.status_group = QButtonGroup()
+        self.status_widget = QWidget(self)
+        self.status_widget.setLayout(QVBoxLayout())
+        for i in range(3):
+            self.status_group.addButton(self.radios[i])
+            self.radios[i].setProperty('status', i)
+            self.status_widget.layout().addWidget(self.radios[i])
+        self.radios[match['status'] + 1 if match['status'] != 2 else match['status']].setChecked(True)
         self.accept_button = QPushButton('Accept')
         self.accept_button.clicked.connect(self.match_accepted)
         self.layout.addRow(match['team1'], self.t1_spin)
         self.layout.addRow(match['team2'], self.t2_spin)
-        self.layout.addRow('Status:', self.status_combo)
+        self.layout.addRow('Status:', self.status_widget)
         self.layout.addRow('', self.accept_button)
         self.setLayout(self.layout)
 
     def match_accepted(self):
         score1 = self.t1_spin.value()
         score2 = self.t2_spin.value()
-        status = self.status_combo.currentIndex()
+        print(self.status_group.checkedButton())
+        status = self.status_group.checkedButton().property('status')
 
         if status == 2 and \
                 not (0 == score1 < score2 or 0 == score2 < score1):
