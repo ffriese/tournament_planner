@@ -240,7 +240,6 @@ class DataBaseManager:
             self.db.close()
 
     def update_match(self, match):
-        print('MATCH HAS BEEN RECEIVED BY DB_APP:', match)
         self.db.open()
         try:
             query = QSqlQuery()
@@ -252,7 +251,6 @@ class DataBaseManager:
             query.bindValue(':m_id', match['id'])
             self.execute_query(query)
             print(DBException(query).get_last_query())
-            print('hmm')
         finally:
             self.db.close()
 
@@ -266,7 +264,6 @@ class DataBaseManager:
                 if data['next_stage'] is None:
                     raise AssertionError('TOURNAMENT COMPLETE, THIS SHOULD NEVER HAPPEN ANYHOW')
                 elif data['next_stage']['name'] == 'GROUP':
-                    # TODO: DO CRAZY GROUP STUFF!!
                     # 1) get all group ids and rounds
                     query.prepare('SELECT id, rounds, name FROM Groups WHERE group_stage == :gs_id')
                     query.bindValue(':gs_id', data['next_stage']['id'])
@@ -288,10 +285,9 @@ class DataBaseManager:
                             for game_day in sched:
                                 for m in game_day:
                                     if m[0] != 'BYE' and m[1] != 'BYE':
-                                        schedule.append({'team1_id': m[0]['id'],
-                                                                        'team2_id': m[1]['id']})
-                        #                print(m)
-                        # print('------------------------------')
+                                        teams = (m[0], m[1]) if round % 2 else (m[1], m[0])
+                                        schedule.append({'team1_id': teams[0]['id'],
+                                                         'team2_id': teams[1]['id']})
                     print(schedule)
                     query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
                                   'VALUES (:t1, :t2, 0, :ts_id)')
@@ -300,6 +296,7 @@ class DataBaseManager:
                     query.bindValue(':ts_id', [QVariant(data['next_stage']['id']) for m in schedule])
                     self.execute_query(query, batch=True)
                 else:
+                    print('TODO: DO CRAZY KO-STAGE STUFF')
                     # TODO: DO CRAZY KO-STAGE STUFF
                     pass
             elif data['status'] == TournamentStageStatus.INITIALIZED:
@@ -612,6 +609,47 @@ class DataBaseManager:
                 }
                 groups.append(group)
             return groups
+        finally:
+            self.db.close()
+
+    def get_all_time_table(self):
+        self.db.open()
+        try:
+            query = QSqlQuery()
+            query.prepare('SELECT team, name, games, won, lost, diff, score, conceded FROM '
+                          '(SELECT team, SUM(Win)+SUM(Loss) as games, SUM(Win) As won, SUM(Loss) as lost, '
+                          'Sum(score)-Sum(against) as diff, SUM(score) as score , SUM(against) as conceded '
+                          'FROM ( SELECT team1 as team, '
+                          'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
+                          'CASE WHEN team1_score <  team2_score THEN 1 ELSE 0 END as Loss, team1_score as score '
+                          'FROM Matches UNION ALL SELECT team2 as team, '
+                          'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
+                          'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
+                          'FROM Matches) t GROUP BY team '
+                          'ORDER By won DESC, diff DESC, score DESC) '
+                          'as ewig JOIN Teams ON  ewig.team == Teams.id')
+            self.execute_query(query)
+            teams = []
+            # for each team
+            while query.next():
+                teams.append({
+                    'id': query.value('team'),
+                    'name': query.value('name'),
+                    'games': query.value('games'),
+                    'won': query.value('won'),
+                    'lost': query.value('lost'),
+                    'diff': query.value('diff'),
+                    'score': query.value('score'),
+                    'conceded': query.value('conceded')
+                })
+            group = {
+                'name': 'ALL TIME TABLE',
+                'id': None,
+                'size': len(teams),
+                'teams': teams,
+                'matches': None
+            }
+            return [group]
         finally:
             self.db.close()
 

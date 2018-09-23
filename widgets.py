@@ -129,7 +129,7 @@ class TournamentWidget(QWidget):
         self.widgets['draw_groups'].groups_drawn.connect(self.update_tournament_groups)
         self.widgets['generate_matches'].match_generation_requested.connect(self.generate_matches)
         self.widgets['groups'].match_edited.connect(self.update_match)
-        self.main_widget.button_clicked.connect(self.react_to_button)
+        self.main_widget.button_clicked.connect(self.show_widget)
         self.show_main_page()
 
     def show_main_page(self):
@@ -138,7 +138,7 @@ class TournamentWidget(QWidget):
         self.main_widget.show()
         self.main_page_button.hide()
 
-    def react_to_button(self, widget_name):
+    def show_widget(self, widget_name):
         if widget_name in self.widgets:
             self.main_widget.hide()
             self.main_page_button.show()
@@ -230,9 +230,9 @@ class TournamentMainWidget(QWidget):
                 # as soon as teams are complete, until matches are generated
                              },
             'generate_matches': {
-                'bt': QPushButton('Generate Matches', self),
+                'bt': QPushButton('Generate next Matches', self),
                 'icon': QIcon('icons/application_form.png'),
-                'enabled': lambda stage, status: stage == 0 and status == TournamentStageStatus.COMPLETE
+                'enabled': lambda stage, status: status == TournamentStageStatus.COMPLETE
                 # only after groups are drawn, not after matches are generated
                              },
             'ko_stage': {
@@ -427,7 +427,7 @@ class GroupDrawWidget(QWidget):
         self.layout.addWidget(self.team_list_widget)
         self.v_layout.addLayout(self.layout)
         self.accept_button = QPushButton('Accept')
-        self.accept_button.clicked.connect(self.accepted)
+        self.accept_button.clicked.connect(self.draw_accepted)
         self.accept_button.setEnabled(False)
         self.v_layout.addWidget(self.accept_button)
         self.setLayout(self.v_layout)
@@ -435,7 +435,7 @@ class GroupDrawWidget(QWidget):
         self.g_teams = []
         self.groups = {}
 
-    def accepted(self):
+    def draw_accepted(self):
         groups = self.group_stage_widget.get_groups()
         for group in groups:
             teams = group['teams']
@@ -496,13 +496,13 @@ class GroupStageWidget(QWidget):
         p = QPainter(self)
         self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
 
-    def set_groups(self, groups, teams_only=False):
+    def set_groups(self, groups, teams_only=False, editable=True):
         if self.flow_layout.count() != len(groups):
             for i in reversed(range(self.flow_layout.count())):
                 self.flow_layout.itemAt(i).widget().setParent(None)
             self.group_widgets.clear()
             for group in groups:
-                gw = GroupWidget(parent=self, teams_only=teams_only)
+                gw = GroupWidget(parent=self, teams_only=teams_only, editable=editable)
                 gw.match_edited.connect(self.match_edited)
                 if self.drag_drop_enabled:
                     gw.table.setDefaultDropAction(Qt.MoveAction)
@@ -522,21 +522,23 @@ class GroupStageWidget(QWidget):
             group = []
             for r in range(w.table.rowCount()):
                 item = w.table.item(r, 0)
-                if item is not None:
+                if item is not None and item.text() is not '':
                     group.append(item.text())
             groups.append({'name': w.table.model().headerData(0, Qt.Horizontal),
                            'teams': group, 'rounds': w.table.roundSpinBox.value()})
         return groups
 
-    def add_matches(self, matches):
-        pass
+    def show(self):
+        super().show()
+        for gw in self.group_widgets:
+            gw.table.recalculate_size()
 
 
 # todo: implement with retractable match-view
 class GroupWidget(QFrame):
     match_edited = pyqtSignal(dict)
 
-    def __init__(self, parent=None, teams_only=False, editable=True):
+    def __init__(self, parent=None, teams_only=False, editable=False):
         super().__init__(parent)
         self.setLayout(QVBoxLayout())
         self.teams_only = teams_only
@@ -627,8 +629,8 @@ class MatchTable(QTableWidget):
                 self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsEditable)
             row += 1
 
-        width = 2
-        height = 2
+        width = 4
+        height = 4
         for column in range(self.model().columnCount()):
             width += self.columnWidth(column)
         for row in range(self.model().rowCount()):
@@ -675,15 +677,6 @@ class GroupTable(QTableWidget):
         self.setColumnWidth(0, 250)
         self.team_count = group['size']
         self.setRowCount(group['size'])
-        width = self.verticalHeader().width() + 4
-        height = self.horizontalHeader().height() + 4
-        for column in range(self.model().columnCount()):
-            width += self.columnWidth(column)
-        for row in range(self.model().rowCount()):
-            height += self.rowHeight(row)
-        self.setMinimumWidth(width)
-        self.setMinimumHeight(height)
-        self.setMaximumHeight(height)
 
         row = 0
         for team in group['teams']:
@@ -704,6 +697,21 @@ class GroupTable(QTableWidget):
                         self.setItem(r, c, QTableWidgetItem())
                     self.item(r, c).setFlags(self.item(r, c).flags() ^ Qt.ItemIsEditable)
                     self.item(r, c).setFlags(self.item(r, c).flags() ^ Qt.ItemIsSelectable)
+
+        self.recalculate_size()
+
+    def recalculate_size(self):
+        for i in range(1, self.model().columnCount()):
+            self.resizeColumnToContents(i)
+        width = self.verticalHeader().width() + 4
+        height = self.horizontalHeader().height() + 4
+        for column in range(self.model().columnCount()):
+            width += self.columnWidth(column)
+        for row in range(self.model().rowCount()):
+            height += self.rowHeight(row)
+        self.setMinimumWidth(width)
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
 
     def switch_item(self, original, new, icon=None, internal_switch=False):
         if internal_switch:
@@ -867,7 +875,7 @@ class EditMatchDialog(QDialog):
         self.status_combo.addItem('Scheduled')
         self.status_combo.addItem('In Progress')
         self.status_combo.addItem('Finished')
-        self.status_combo.setCurrentIndex(match['status'])
+        self.status_combo.setCurrentIndex(match['status'] + 1 if match['status'] != 2 else match['status'])
         self.accept_button = QPushButton('Accept')
         self.accept_button.clicked.connect(self.match_accepted)
         self.layout.addRow(match['team1'], self.t1_spin)
@@ -894,6 +902,17 @@ class EditMatchDialog(QDialog):
             self.match['status'] = status
             self.match_updated.emit(self.match)
             self.accept()
+
+
+# todo: implement match view next to group-stage-widget
+class AllTimeTableWidget(GroupStageWidget):
+    def __init__(self, database, parent=None):
+        super().__init__(parent, False)
+        self.database = database
+
+    def update_table(self):
+        all_time_table = self.database.get_all_time_table()
+        self.set_groups(all_time_table, editable=False)
 
 #  ----------------------------------------------------------------------------
 #

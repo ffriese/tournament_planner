@@ -5,7 +5,7 @@ from PyQt5.QtCore import pyqtSignal, QDir, QCoreApplication, Qt
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow, QToolBar
 from PyQt5.QtGui import QIcon, QImage
 
-from widgets import TournamentWidget
+from widgets import TournamentWidget, AllTimeTableWidget
 from wizards import TournamentWizard
 from tools import DataBaseManager, DBException
 
@@ -35,10 +35,14 @@ class App(QMainWindow):
         self.fetch_data()
         self.homeWidget = HomeWidget(self.data)
         self.tournamentWidget = TournamentWidget(self.database, self)
+        self.allTimeTableWidget = AllTimeTableWidget(self.database, self)
+        self.tournamentWidget.hide()
+        self.allTimeTableWidget.hide()
         self.setCentralWidget(self.homeWidget)
 
         self.homeWidget.tournament_opened.connect(self.open_tournament)
         self.homeWidget.tournament_created.connect(self.create_tournament)
+        self.homeWidget.show_all_time_table.connect(self.show_all_time_table)
 
         #directory = QDir('icons')
         #files = directory.entryList(["*.png"])
@@ -55,10 +59,16 @@ class App(QMainWindow):
 
     def switch_central_widget(self, widget):
         self.centralWidget().setParent(None)  # prevent_deletion
+        #self.centralWidget().hide()
         self.setCentralWidget(widget)
+        widget.show()
 
     def go_home(self):
         self.switch_central_widget(self.homeWidget)
+
+    def show_all_time_table(self):
+        self.allTimeTableWidget.update_table()
+        self.switch_central_widget(self.allTimeTableWidget)
 
     def open_tournament(self, tournament):
         try:
@@ -79,12 +89,13 @@ class App(QMainWindow):
                 self.homeWidget = HomeWidget(self.data)
                 self.homeWidget.tournament_opened.connect(self.open_tournament)
                 self.homeWidget.tournament_created.connect(self.create_tournament)
-                self.setCentralWidget(self.homeWidget)
+                self.go_home()
 
 
 class HomeWidget(QWidget):
     tournament_opened = pyqtSignal(dict)
     tournament_created = pyqtSignal(dict)
+    show_all_time_table = pyqtSignal()
 
     def __init__(self, data):
         super().__init__()
@@ -104,6 +115,10 @@ class HomeWidget(QWidget):
         create_tournament_button.setStyleSheet('background-color: rgb(190, 190, 190); color: rgb(0, 0, 0)')
         create_tournament_button.setIcon(QIcon('icons/application_add'))
         create_tournament_button.clicked.connect(self.show_tournament_wizard)
+        all_time_table_button = QPushButton('All_Time_Table', self)
+        all_time_table_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        all_time_table_button.setIcon(QIcon('icons/medal_gold_1.png'))
+        all_time_table_button.clicked.connect(self.show_all_time_table)
         row = 0
         col = 0
         for t in self.data['Tournaments']:
@@ -121,6 +136,12 @@ class HomeWidget(QWidget):
                 row += 1
 
         self.layout.addWidget(create_tournament_button, row, col)
+        if col == 0:
+            col = 1
+        else:
+            col = 0
+            row += 1
+        self.layout.addWidget(all_time_table_button, row, col)
 
     def tournament_clicked(self):
         self.tournament_opened.emit(self.sender().property('tournament'))
