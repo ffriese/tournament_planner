@@ -214,36 +214,36 @@ class TournamentMainWidget(QWidget):
             'tournament_settings': {
                 'bt': QPushButton('Tournament Settings', self),
                 'icon': QIcon('icons/application_edit.png'),
-                'enabled': lambda stage, status: True
+                'enabled': lambda stage, name, status: True
                              },
             'manage_teams': {
                 'bt': QPushButton('Manage Teams', self),
                 'icon': QIcon('icons/application_side_list.png'),
-                'enabled': lambda stage, status: stage == 0 and status != TournamentStageStatus.COMPLETE
+                'enabled': lambda stage, name, status: stage == 0 and status != TournamentStageStatus.COMPLETE
                 # groups not yet drawn
                              },
             'groups': {
                 'bt': QPushButton('Groups', self),
                 'icon': QIcon('icons/table.png'),
-                'enabled': lambda stage, status: True
+                'enabled': lambda stage, name, status: True
                 # always show, empty groups aren't a bad thing :P
                              },
             'draw_groups': {
                 'bt': QPushButton('Draw Groups', self),
                 'icon': QIcon('icons/text_padding_left.png'),
-                'enabled': lambda stage, status: stage == 0 and status != TournamentStageStatus.INITIALIZED
+                'enabled': lambda stage, name, status: stage == 0 and status != TournamentStageStatus.INITIALIZED
                 # as soon as teams are complete, until matches are generated
                              },
             'generate_matches': {
                 'bt': QPushButton('Generate next Matches', self),
                 'icon': QIcon('icons/application_form.png'),
-                'enabled': lambda stage, status: status == TournamentStageStatus.COMPLETE
-                # only after groups are drawn, not after matches are generated
+                'enabled': lambda stage, name, status: status == TournamentStageStatus.COMPLETE and name != 'KO_FINAL_1'
+                # show if current stage is complete, but not the final stage
                              },
             'ko_stage': {
                 'bt': QPushButton('KO-Stage', self),
                 'icon': QIcon('icons/sitemap.png'),
-                'enabled': lambda stage, status: True
+                'enabled': lambda stage, name, status: True
                              },
         }
         self.status = None
@@ -284,7 +284,7 @@ class TournamentMainWidget(QWidget):
     def set_status(self, status):
         self.status = status
         for button in self.buttons:
-            if self.buttons[button]['enabled'](status['current_stage'], status['status']):
+            if self.buttons[button]['enabled'](status['current_stage'], status['name'], status['status']):
                 self.buttons[button]['bt'].show()
             else:
                 self.buttons[button]['bt'].hide()
