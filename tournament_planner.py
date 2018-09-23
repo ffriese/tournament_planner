@@ -63,7 +63,7 @@ class App(QMainWindow):
     def open_tournament(self, tournament):
         try:
             t_teams = self.database.get_tournament_teams(tournament['id'])
-            groups = self.database.get_tournament_groups(tournament['id'], retrieve_matches=True)
+            groups = self.database.get_tournament_groups(tournament['id'])
             status = self.database.get_tournament_status(tournament['id'])
             self.tournamentWidget.set_tournament(tournament, db_teams=self.data['Teams'],
                                                  t_teams=t_teams, groups=groups, status=status)

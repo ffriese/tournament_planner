@@ -1,12 +1,14 @@
 import inspect
 import os
+from collections import OrderedDict
+
 from PyQt5.QtCore import QSize, Qt, pyqtSignal, QSortFilterProxyModel, QMimeData, QDataStream, QModelIndex, QPoint, \
     QCoreApplication
 from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QDropEvent, QStandardItemModel, QDragMoveEvent, \
     QDragLeaveEvent, QDragEnterEvent, QStandardItem
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QSizePolicy, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
-    QCompleter, QStyleOption, QStyle, QAbstractItemView, QItemDelegate, QSpinBox
+    QCompleter, QStyleOption, QStyle, QAbstractItemView, QItemDelegate, QSpinBox, QFrame, QDialog, QFormLayout
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -20,13 +22,24 @@ class WidgetTools:
             if sheet is not None:
                 for pair in sheet.split(';'):
                     try:
-                        key, value = pair.split(':')
-                        styles[key.strip()] = value.strip()
+                        _key, _val = pair.split(':')
+                        styles[_key.strip()] = _val.strip()
                     except ValueError:  # invalid pair
                         pass
             return styles
 
-        widget_style = {}
+        def extract_selectors(sheet):
+            selectors = OrderedDict()
+            if sheet is not None:
+                sels = sheet.split('}')
+                for sel in sels:
+                    if sel.__contains__('{'):
+                        _key, _val = sel.split('{')
+                        selectors[_key.strip()] = _val.strip()
+            return selectors
+
+        #widget_style = {}
+        selector_style = OrderedDict()
         parent_list = [widget]
         p = widget
         while p.parent() is not None:
@@ -34,13 +47,33 @@ class WidgetTools:
             parent_list.append(p)
         parent_list.reverse()
         for p in parent_list:
-            p_style = extract_styles(p.styleSheet())
-            for key in p_style:
-                widget_style[key] = p_style[key]
+            p_sels = extract_selectors(p.styleSheet())
+            if not p_sels:
+                style = extract_styles(p.styleSheet())
+                if not selector_style.keys().__contains__('*'):
+                    selector_style['*'] = {}
+                for key in style:
+                    selector_style['*'][key] = style[key]
+            else:
+                for sel in p_sels:
+                    selector_style[sel] = {}
+                    sel_style = extract_styles(p_sels[sel])
+                    for key in sel_style:
+                        selector_style[sel][key] = sel_style[key]
+            #p_style = extract_styles(p.styleSheet())
+            #for key in p_style:
+            #    widget_style[key] = p_style[key]
         if return_as_dict:
-            return widget_style
+            #return widget_style
+            return selector_style
         else:
-            return ';'.join(['%s:%s' % (key, widget_style[key]) for key in widget_style])
+            #return ';'.join(['%s:%s' % (key, widget_style[key]) for key in widget_style])
+            sheet = ''
+            for selector in selector_style:
+                sheet += '%s{%s}' % (selector,
+                                     ';'.join(['%s:%s' % (key, selector_style[selector][key])
+                                               for key in selector_style[selector]]))
+            return sheet
 
     @staticmethod
     def css_color_to_rgb(css_color):
@@ -95,6 +128,7 @@ class TournamentWidget(QWidget):
         self.widgets['manage_teams'].teams_changed.connect(self.update_tournament_teams)
         self.widgets['draw_groups'].groups_drawn.connect(self.update_tournament_groups)
         self.widgets['generate_matches'].match_generation_requested.connect(self.generate_matches)
+        self.widgets['groups'].match_edited.connect(self.update_match)
         self.main_widget.button_clicked.connect(self.react_to_button)
         self.show_main_page()
 
@@ -132,7 +166,7 @@ class TournamentWidget(QWidget):
     def update_tournament(self):
         db_teams = self.database.get_teams()
         t_teams = self.database.get_tournament_teams(self.tournament['id'])
-        groups = self.database.get_tournament_groups(self.tournament['id'], retrieve_matches=True)
+        groups = self.database.get_tournament_groups(self.tournament['id'])
         status = self.database.get_tournament_status(self.tournament['id'])
         self.set_tournament(self.tournament, db_teams=db_teams,
                             t_teams=t_teams, groups=groups, status=status)
@@ -152,6 +186,11 @@ class TournamentWidget(QWidget):
         self.database.generate_matches(self.tournament['id'], data)
         self.update_tournament()
         self.show_main_page()
+
+    def update_match(self, match):
+        print(match)
+        self.database.update_match(match)
+        self.update_tournament()
 
 
 class TournamentMainWidget(QWidget):
@@ -285,14 +324,16 @@ class TeamSelectorWidget(QListWidget):
         sheet = WidgetTools.find_stylesheet(self, return_as_dict=True)
         self.number_color = None
         self.number_font_weight = None
-        if 'color' in sheet.keys():
-            self.number_color = WidgetTools.css_color_to_rgb(sheet['color'])
-        if 'font-weight' in sheet.keys():
-            weight = sheet['font-weight']
-            if weight == 'bold':
-                self.number_font_weight = 75
-            else:
-                self.number_font_weight = weight
+        for selector in sheet.keys():
+            if selector == '*':
+                if 'color' in sheet[selector].keys():
+                    self.number_color = WidgetTools.css_color_to_rgb(sheet[selector]['color'])
+                if 'font-weight' in sheet[selector].keys():
+                    weight = sheet[selector]['font-weight']
+                    if weight == 'bold':
+                        self.number_font_weight = 75
+                    else:
+                        self.number_font_weight = weight
 
     def set_teams(self, db_teams, count, t_teams=None):
         self.t_teams = t_teams
@@ -432,6 +473,8 @@ class GroupDrawWidget(QWidget):
 
 
 class GroupStageWidget(QWidget):
+    match_edited = pyqtSignal(dict)
+
     def __init__(self, parent=None, enable_drag_drop=False):
         super().__init__(parent=parent)
         self.flow_layout = FlowLayout()
@@ -454,18 +497,24 @@ class GroupStageWidget(QWidget):
         self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
 
     def set_groups(self, groups, teams_only=False):
-        for i in reversed(range(self.flow_layout.count())):
-            self.flow_layout.itemAt(i).widget().setParent(None)
-        self.group_widgets.clear()
-        for group in groups:
-            tw = GroupWidget(group, parent=self, teams_only=teams_only)
-            if self.drag_drop_enabled:
-                tw.table.setDefaultDropAction(Qt.MoveAction)
-                tw.table.setDragDropMode(QAbstractItemView.DragDrop)
-                tw.table.setDragDropOverwriteMode(False)
-                tw.table.setDropIndicatorShown(False)
-            self.group_widgets.append(tw)
-            self.flow_layout.addWidget(tw)
+        if self.flow_layout.count() != len(groups):
+            for i in reversed(range(self.flow_layout.count())):
+                self.flow_layout.itemAt(i).widget().setParent(None)
+            self.group_widgets.clear()
+            for group in groups:
+                gw = GroupWidget(parent=self, teams_only=teams_only)
+                gw.match_edited.connect(self.match_edited)
+                if self.drag_drop_enabled:
+                    gw.table.setDefaultDropAction(Qt.MoveAction)
+                    gw.table.setDragDropMode(QAbstractItemView.DragDrop)
+                    gw.table.setDragDropOverwriteMode(False)
+                    gw.table.setDropIndicatorShown(False)
+                self.group_widgets.append(gw)
+                self.flow_layout.addWidget(gw)
+        i = 0
+        for gw in self.group_widgets:
+            gw.set_group(groups[i])
+            i += 1
 
     def get_groups(self):
         groups = []
@@ -484,20 +533,31 @@ class GroupStageWidget(QWidget):
 
 
 # todo: implement with retractable match-view
-class GroupWidget(QWidget):
-    def __init__(self, group, parent=None, teams_only=False):
+class GroupWidget(QFrame):
+    match_edited = pyqtSignal(dict)
+
+    def __init__(self, parent=None, teams_only=False, editable=True):
         super().__init__(parent)
         self.setLayout(QVBoxLayout())
         self.teams_only = teams_only
-        self.table = GroupTable(group=group, parent=self, teams_only=teams_only)
-        self.match_table = MatchTable(group=group, parent=self)
+        self.table = GroupTable(parent=self, teams_only=teams_only)
+        self.match_table = MatchTable(editable=editable, parent=self)
+        self.match_table.match_edited.connect(self.match_edited)
         self.layout().addWidget(self.table)
         self.layout().addWidget(self.match_table)
+        self.setFrameShape(QFrame.Panel)
+        self.setFrameShadow(QFrame.Sunken)
         # self.match_table.hide()
+
+    def set_group(self, group):
+        self.table.set_group(group)
+        self.match_table.set_group(group)
 
 
 class MatchTable(QTableWidget):
-    def __init__(self, group, parent=None):
+    match_edited = pyqtSignal(dict)
+
+    def __init__(self, editable=True, parent=None):
         super().__init__(parent=parent)
         self.verticalHeader().setDefaultSectionSize(20)
         self.horizontalHeader().sectionPressed.disconnect()
@@ -508,51 +568,86 @@ class MatchTable(QTableWidget):
         self.verticalHeader().hide()
         self.setFocusPolicy(Qt.NoFocus)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.clear()
-        self.setColumnCount(6)
+        self.setColumnCount(7 if editable else 6)
         self.setShowGrid(False)
+        self.setFrameStyle(QFrame.NoFrame)
+        self.dialog = None
+        self.highlight_color = QColor(193, 8, 38)
+        sheet = WidgetTools.find_stylesheet(self, return_as_dict=True)
+        if '*[highlighted]' in sheet.keys():
+            if 'color' in sheet['*[highlighted]'].keys():
+                self.highlight_color = WidgetTools.css_color_to_rgb(sheet['*[highlighted]']['color'])
+        self.editable = editable
+
+        self.setColumnWidth(0, 140 if editable else 150)
+        self.setColumnWidth(1, 10)
+        self.setColumnWidth(2, 140 if editable else 150)
+        self.setColumnWidth(3, 20)
+        self.setColumnWidth(4, 10)
+        self.setColumnWidth(5, 20)
+        if self.editable:
+            self.setColumnWidth(6, 20)
+
+    def set_group(self, group):
         matches = group['matches'] if group['matches'] is not None else []
+        self.clear()
         self.setRowCount(len(matches))
         row = 0
         for match in matches:
             self.setItem(row, 0, QTableWidgetItem(match['team1']))
             self.item(row, 0).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.setItem(row, 1, QTableWidgetItem('-'))
+            self.item(row, 1).setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
             self.setItem(row, 2, QTableWidgetItem(match['team2']))
             self.setItem(row, 3, QTableWidgetItem(str(match['team1_score'])
                                                   if str(match['team1_score']) != '' else '-'))
+
+            self.item(row, 3).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.setItem(row, 4, QTableWidgetItem(':'))
+
+            self.item(row, 4).setTextAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
             self.setItem(row, 5, QTableWidgetItem(str(match['team2_score'])
                                                   if str(match['team2_score']) != '' else '-'))
-            for c in range(0, 5):
+            if self.editable:
+                button_widget = QWidget()
+                btn_edit = QPushButton()
+                btn_edit.setIcon(QIcon('icons/pencil.png'))
+                btn_edit.setProperty('match', match)
+                btn_edit.clicked.connect(self.edit_match)
+                button_layout = QHBoxLayout(button_widget)
+                button_layout.addWidget(btn_edit)
+                button_layout.setAlignment(Qt.AlignCenter)
+                button_layout.setContentsMargins(0, 0, 0, 0)
+                button_widget.setLayout(button_layout)
+                self.setCellWidget(row, 6, button_widget)
+            for c in range(0, 6):
+                if match['status'] == 1:
+                    self.item(row, c).setForeground(self.highlight_color)
                 self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsSelectable)
                 self.item(row, c).setFlags(self.item(row, c).flags() ^ Qt.ItemIsEditable)
             row += 1
-        self.setColumnWidth(0, 150)
-        self.setColumnWidth(1, 10)
-        self.setColumnWidth(2, 150)
-        self.setColumnWidth(3, 20)
-        self.setColumnWidth(4, 10)
-        self.setColumnWidth(5, 20)
+
         width = 2
         height = 2
-        # print(height, width, self.model().columnCount(), self.model().rowCount())
         for column in range(self.model().columnCount()):
             width += self.columnWidth(column)
         for row in range(self.model().rowCount()):
             height += self.rowHeight(row)
-        # print(height, width)
         self.setMinimumWidth(width)
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
 
+    def edit_match(self):
+        self.dialog = EditMatchDialog(self.sender().property('match'), parent=self)
+        self.dialog.match_updated.connect(self.match_edited)
+        self.dialog.show()
+
 
 class GroupTable(QTableWidget):
-    def __init__(self, group, parent=None, teams_only=False):
+    def __init__(self, parent=None, teams_only=False):
         super().__init__(parent=parent)
         self.teams_only = teams_only
-        self.team_count = group['size']
-        self.setRowCount(group['size'])
+        self.team_count = 0
         self.verticalHeader().setDefaultSectionSize(20)
         self.horizontalHeader().sectionPressed.disconnect()
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
@@ -560,6 +655,10 @@ class GroupTable(QTableWidget):
         self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.setFocusPolicy(Qt.NoFocus)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setFrameStyle(QFrame.NoFrame)
+        self.roundSpinBox = None
+
+    def set_group(self, group):
         if not self.teams_only:
             self.setColumnCount(5)
             self.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
@@ -567,30 +666,21 @@ class GroupTable(QTableWidget):
             self.setColumnWidth(2, 20)
             self.setColumnWidth(3, 20)
             self.setColumnWidth(4, 40)
-            #size = QSize(250 + 20 + 20 + 20 + 40 + 13, 20 * group['size'] + 22)
-            #self.setMinimumSize(size)
-            #self.setMaximumSize(size)
         else:
             self.roundSpinBox = QSpinBox(self)
             self.roundSpinBox.setMinimum(1)
             self.roundSpinBox.setToolTip('Number of rounds for this group')
             self.setColumnCount(1)
-            self.setHorizontalHeaderLabels([group['name']])  #
-            #size = QSize(250 + 13, 20 * group['size'] + 22)
-            #self.setMinimumSize(size)
-            #self.setMaximumSize(size)
+            self.setHorizontalHeaderLabels([group['name']])
         self.setColumnWidth(0, 250)
-
-        #width = (self.model().columnCount() - 1) + self.verticalHeader().width()
-        #height = (self.model().rowCount() - 1) + self.horizontalHeader().height()
-        width = self.verticalHeader().width() + 2
-        height = self.horizontalHeader().height() + 2
-        #print(height, width, self.model().columnCount(), self.model().rowCount())
+        self.team_count = group['size']
+        self.setRowCount(group['size'])
+        width = self.verticalHeader().width() + 4
+        height = self.horizontalHeader().height() + 4
         for column in range(self.model().columnCount()):
             width += self.columnWidth(column)
         for row in range(self.model().rowCount()):
             height += self.rowHeight(row)
-        #print(height, width)
         self.setMinimumWidth(width)
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
@@ -753,6 +843,57 @@ class GenerateMatchesWidget(QWidget):
     def generate(self):
         self.match_generation_requested.emit(self.stage)
 
+
+class EditMatchDialog(QDialog):
+    match_updated = pyqtSignal(dict)
+
+    def __init__(self, match, parent=None):
+        super(EditMatchDialog, self).__init__(parent)
+        self.match = match
+        self.setGeometry(self.geometry().x(), self.geometry().y(), 400, 150)
+        self.setWindowTitle('Edit Match')
+        self.setWindowIcon(QIcon('icons/pencil.png'))
+        self.setWindowModality(Qt.ApplicationModal)
+        self.layout = QFormLayout(self)
+        self.t1_spin = QSpinBox(self)
+        self.t1_spin.setMinimum(0)
+        if str(match['team1_score']) != '':
+            self.t1_spin.setValue(int(match['team1_score']))
+        self.t2_spin = QSpinBox(self)
+        self.t2_spin.setMinimum(0)
+        if str(match['team2_score']) != '':
+            self.t2_spin.setValue(int(match['team2_score']))
+        self.status_combo = QComboBox(self)
+        self.status_combo.addItem('Scheduled')
+        self.status_combo.addItem('In Progress')
+        self.status_combo.addItem('Finished')
+        self.status_combo.setCurrentIndex(match['status'])
+        self.accept_button = QPushButton('Accept')
+        self.accept_button.clicked.connect(self.match_accepted)
+        self.layout.addRow(match['team1'], self.t1_spin)
+        self.layout.addRow(match['team2'], self.t2_spin)
+        self.layout.addRow('Status:', self.status_combo)
+        self.layout.addRow('', self.accept_button)
+        self.setLayout(self.layout)
+
+    def match_accepted(self):
+        score1 = self.t1_spin.value()
+        score2 = self.t2_spin.value()
+        status = self.status_combo.currentIndex()
+
+        if status == 2 and \
+                not (0 == score1 < score2 or 0 == score2 < score1):
+            print('MATCH INVALID!!!!')
+        else:
+            if status == 0:
+                self.match['team1_score'] = None
+                self.match['team2_score'] = None
+            else:
+                self.match['team1_score'] = score1
+                self.match['team2_score'] = score2
+            self.match['status'] = status
+            self.match_updated.emit(self.match)
+            self.accept()
 
 #  ----------------------------------------------------------------------------
 #

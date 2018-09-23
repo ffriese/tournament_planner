@@ -4,21 +4,30 @@ from tools import DataBaseManager
 import csv
 
 
-flunkyrocks = {'2015': 'background-color: rgb(30,143,158); color: rgb(0,0,80)',
-               '2016': 'background-color: rgb(70,190,130); color: rgb(0,80,0)',
-               '2017': 'background-color: rgb(174,56,52); color: rgb(255,255,255)'}
+flunky_rocks = {'2015': '*{background-color: rgb(30,143,158); color: rgb(0,0,80)}',
+                '2016': '*{background-color: rgb(70,190,130); color: rgb(0,80,0)}',
+                '2017': '*{background-color: rgb(174,56,52); color: rgb(255,255,255)} '
+                        '*[highlighted]{color: rgb(40,154,183)}'}
+
+# background-images are ugly if used globally, we will need to create specific images for different widget types
+# flunky_rocks = {'2015': 'background-color: rgb(30,143,158); background-image: url(imgs/2015.png); '
+#                       'color: rgb(0,0,80)',
+#               '2016': 'background-color: rgb(70,190,130); background-image: url(imgs/2016.png); '
+#                       'color: rgb(0,80,0)',
+#               '2017': 'background-color: rgb(174,56,52); background-image: url(imgs/2017.png); '
+#                       'color: rgb(255,255,255)'}
 
 database = DataBaseManager()
 
-for year in sorted(flunkyrocks.keys()):
+for year in sorted(flunky_rocks.keys()):
     groups = {}
     matches = {}
     teams = {}
     ko_stages = {}
     finals = {}
 
-    with open('%s.csv' % year, 'r', encoding='utf-8') as csvfile:
-        reader = csv.reader(csvfile, delimiter=';', quotechar='"')
+    with open('%s.csv' % year, 'r', encoding='utf-8') as csv_file:
+        reader = csv.reader(csv_file, delimiter=';', quotechar='"')
         for row in reader:
             team1 = row[0]
             team2 = row[1]
@@ -61,7 +70,7 @@ for year in sorted(flunkyrocks.keys()):
 
     data = {'group_size': group_size,
             'name': 'FlunkyRock %s' % year,
-            'stylesheet': flunkyrocks[year],
+            'stylesheet': flunky_rocks[year],
             'teams': teams,
             'groups': groups,
             'ko_stages': ko_stages,

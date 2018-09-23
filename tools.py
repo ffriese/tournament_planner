@@ -239,6 +239,23 @@ class DataBaseManager:
         finally:
             self.db.close()
 
+    def update_match(self, match):
+        print('MATCH HAS BEEN RECEIVED BY DB_APP:', match)
+        self.db.open()
+        try:
+            query = QSqlQuery()
+            query.prepare('UPDATE Matches SET team1_score = :t1_s, team2_score = :t2_s, status= :status '
+                          'WHERE id == :m_id')
+            query.bindValue(':t1_s', match['team1_score'])
+            query.bindValue(':t2_s', match['team2_score'])
+            query.bindValue(':status', match['status'])
+            query.bindValue(':m_id', match['id'])
+            self.execute_query(query)
+            print(DBException(query).get_last_query())
+            print('hmm')
+        finally:
+            self.db.close()
+
     def generate_matches(self, tournament_id, data):
         print('database got generate-request', tournament_id, data)
         self.db.open()
@@ -453,7 +470,7 @@ class DataBaseManager:
             stage_index = 0
             for stage in stages:
                 stage_index += 1
-                matchsum = stage['scheduled_matches'] + stage['matches_in_progress'] + stage['complete_matches']
+                match_sum = stage['scheduled_matches'] + stage['matches_in_progress'] + stage['complete_matches']
                 if stage['expected_matches'] > 0:
                     if stage['expected_matches'] == stage['complete_matches']:
                         current_status = {
@@ -462,14 +479,15 @@ class DataBaseManager:
                             'status': TournamentStageStatus.COMPLETE,
                             'next_stage': get_next_stage(stage_index)
                         }
-                        print('stage', stage_index, 'complete')
-                    elif stage['expected_matches'] == matchsum and stage['matches_in_progress'] > 0:
+                        # print('stage', stage_index, 'complete')
+                    elif stage['expected_matches'] == match_sum and \
+                            (stage['matches_in_progress'] > 0 or stage['complete_matches'] > 0):
                         current_status = {
                             'current_stage': stage_index,
                             'name': stage['name'],
                             'status': TournamentStageStatus.IN_PROGRESS
                         }
-                        print('stage', stage_index, 'in progress')
+                        # print('stage', stage_index, 'in progress')
                     elif stage['scheduled_matches'] == stage['expected_matches'] and \
                             prev_stage_complete(stage_index, current_status):
                         current_status = {
@@ -477,9 +495,10 @@ class DataBaseManager:
                             'name': stage['name'],
                             'status': TournamentStageStatus.INITIALIZED
                         }
-                        print('stage', stage_index, 'initialized')
+                        # print('stage', stage_index, 'initialized')
                     else:
-                        print('stage', stage_index, 'pending')
+                        pass
+                        # print('stage', stage_index, 'pending')
             return current_status
         finally:
             self.db.close()
@@ -506,7 +525,7 @@ class DataBaseManager:
         finally:
             self.db.close()
 
-    def get_tournament_groups(self, tournament_id, retrieve_matches=False):
+    def get_tournament_groups(self, tournament_id):
         self.db.open()
         query = QSqlQuery()
         group_table_query = QSqlQuery()
@@ -565,7 +584,6 @@ class DataBaseManager:
             while query.next():
                 group_table_query.bindValue(':g_id', query.record().value('id'))
                 teams = []
-                matches = None
                 self.execute_query(group_table_query)
                 # for each team
                 while group_table_query.next():
@@ -579,13 +597,12 @@ class DataBaseManager:
                         'score': group_table_query.value('score'),
                         'conceded': group_table_query.value('conceded')
                     })
-                if retrieve_matches:
-                    group_matches_query.bindValue(':g_id', query.record().value('id'))
-                    self.execute_query(group_matches_query)
-                    matches = self.simple_get_multiple(group_matches_query,
-                                                       ['id', 'team1_id', 'team2_id', 'team1', 'team2',
-                                                        'team1_score', 'team2_score',
-                                                        'status', 'field'])
+                group_matches_query.bindValue(':g_id', query.record().value('id'))
+                self.execute_query(group_matches_query)
+                matches = self.simple_get_multiple(group_matches_query,
+                                                   ['id', 'team1_id', 'team2_id', 'team1', 'team2',
+                                                    'team1_score', 'team2_score',
+                                                    'status', 'field'])
                 group = {
                     'name': query.record().value('name'),
                     'id': query.record().value('id'),
