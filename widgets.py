@@ -661,6 +661,7 @@ class GroupTable(QTableWidget):
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setFrameStyle(QFrame.NoFrame)
         self.roundSpinBox = None
+        self.total_column_width = 350
 
     def set_group(self, group, teams_only=False):
         if not teams_only:
@@ -703,8 +704,12 @@ class GroupTable(QTableWidget):
         self.recalculate_size()
 
     def recalculate_size(self):
+        resizable_width = 0
         for i in range(1, self.model().columnCount()):
             self.resizeColumnToContents(i)
+            resizable_width += self.columnWidth(i)
+
+        self.setColumnWidth(0, self.total_column_width-resizable_width)
         width = self.verticalHeader().width() + 4
         height = self.horizontalHeader().height() + 4
         for column in range(self.model().columnCount()):
