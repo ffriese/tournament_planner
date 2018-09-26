@@ -1,12 +1,15 @@
 import math
 from enum import Enum
+from urllib.error import URLError
+from urllib.request import urlopen
 
-from PyQt5.QtCore import QVariant
+from PyQt5.QtCore import QVariant, pyqtSignal, QObject
 from PyQt5.QtSql import QSqlQuery, QSqlDatabase
 try:
     from remote_connection import RemoteConnectionManager
 except ImportError:
     pass
+
 
 class TournamentStageStatus(Enum):
     INITIALIZED = 1  # Stage 0: NOT YET ENOUGH TEAMS    , Stage 1+: MATCHES GENERATED
@@ -63,12 +66,16 @@ def create_balanced_round_robin(list):
     return s
 
 
-class DataBaseManager:
+class DataBaseManager(QObject):
+
+    sync_status = pyqtSignal(dict)
+
     def __init__(self):
+        super().__init__()
         self.db = QSqlDatabase.addDatabase('QSQLITE')
         self.db.setDatabaseName('flunkyrock.db')
         self.remote_queue = []
-        remote_sync = True
+        remote_sync = False
         try:
             RemoteConnectionManager()
             self.ONLINE_MODE = remote_sync
@@ -216,18 +223,37 @@ class DataBaseManager:
 
         return update
 
-    def execute_remote_updates(self):
+    @staticmethod
+    def internet_on():
+        try:
+            urlopen('http://flunkyrock.de', timeout=2)
+            return True
+        except URLError as err:
+            return False
 
+    def execute_remote_updates(self):
         success = True
-        while len(self.remote_queue) > 0 and success:
-            update = self.remote_queue[0]
-            print('remote', update['action'], ' ==> ', update)
-            if self.ONLINE_MODE:
-                success = RemoteConnectionManager.send_request(update)
-            else:
-                success = True
-            if success:
-                self.remote_queue.pop(0)
+        queue_size = len(self.remote_queue)
+
+        if self.ONLINE_MODE and self.internet_on():
+            self.sync_status.emit({'internet': True, 'queue_size': queue_size})
+
+            while queue_size > 0 and success:
+                update = self.remote_queue[0]
+                print('remote', update['action'], ' ==> ', update)
+                if self.ONLINE_MODE:
+                    success = RemoteConnectionManager.send_request(update)
+                else:
+                    success = True
+                if success:
+                    self.remote_queue.pop(0)
+                    queue_size = len(self.remote_queue)
+                    self.sync_status.emit({'internet': True, 'queue_size': queue_size})
+                else:
+                    self.sync_status.emit({'internet': self.internet_on(), 'queue_size': queue_size})
+
+        else:
+            self.sync_status.emit({'internet': False, 'queue_size': queue_size})
 
     # used for import-script
     def add_team(self, team_name):
@@ -622,7 +648,7 @@ class DataBaseManager:
         query = QSqlQuery()
         try:
             query.prepare('SELECT * FROM Tournament_Teams JOIN Teams ON Tournament_Teams.team = Teams.id '
-                          'WHERE Tournament_Teams.tournament == :t_id')
+                          'WHERE Tournament_Teams.tournament = :t_id')
             query.bindValue(':t_id', tournament_id)
             self.execute_query(query)
             return self.simple_get_multiple(query, ['id', 'name'])
@@ -650,7 +676,7 @@ class DataBaseManager:
             query.bindValue(':id', tournament_id)
 
             group_table_query.\
-                prepare('SELECT id as team, Teams.name as team_name, COALESCE(Games, 0) as games, '
+                prepare('SELECT id as team, Teams.name as name, COALESCE(Games, 0) as games, '
                         'COALESCE(Won, 0) as won, '
                         'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
                         'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
@@ -659,11 +685,11 @@ class DataBaseManager:
                         'SUM(against) as Against FROM ( SELECT team1 as team, '
                         'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
                         'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
-                        ' FROM Matches WHERE tournament_stage == :stage_id UNION ALL SELECT team2 as team, '
+                        ' FROM Matches WHERE tournament_stage = :stage_id UNION ALL SELECT team2 as team, '
                         'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
                         'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
-                        'FROM Matches WHERE tournament_stage == :stage_id ) t '
-                        'GROUP BY team) as g_table ON Teams.id==g_table.team WHERE Teams.id in '
+                        'FROM Matches WHERE tournament_stage = :stage_id ) t '
+                        'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
                         '(SELECT team FROM Group_Teams WHERE group_id==:g_id) '
                         ' ORDER By won DESC, diff DESC, score DESC, conceded')
 
@@ -680,8 +706,8 @@ class DataBaseManager:
                         ' from Matches'
                         ' join Teams as T1 on Matches.team1 = T1.id'
                         ' join Teams as T2 on Matches.team2 = T2.id '
-                        'WHERE tournament_stage == :stage_id and T1.id in '
-                        '(SELECT team FROM Group_Teams WHERE group_id == :g_id)')
+                        'WHERE tournament_stage = :stage_id and T1.id in '
+                        '(SELECT team FROM Group_Teams WHERE group_id = :g_id)')
             self.execute_query(query)
             stage_id = self.simple_get(query, 'id')
 
@@ -690,7 +716,7 @@ class DataBaseManager:
 
             query.prepare('SELECT * FROM Groups WHERE group_stage IN '
                           '(SELECT tournament_stage from Group_Stages WHERE tournament_stage IN '
-                          '(SELECT id FROM Tournament_Stages WHERE tournament == :id))')
+                          '(SELECT id FROM Tournament_Stages WHERE tournament = :id))')
             query.bindValue(':id', tournament_id)
 
             self.execute_query(query)
@@ -703,7 +729,7 @@ class DataBaseManager:
                 while group_table_query.next():
                     teams.append({
                         'id': group_table_query.value('team'),
-                        'name': group_table_query.value('team_name'),
+                        'name': group_table_query.value('name'),
                         'games': group_table_query.value('games'),
                         'won': group_table_query.value('won'),
                         'lost': group_table_query.value('lost'),
@@ -711,6 +737,63 @@ class DataBaseManager:
                         'score': group_table_query.value('score'),
                         'conceded': group_table_query.value('conceded')
                     })
+
+                # solve position-clashes by direct comparison
+                last_data = ''
+                last_team = -1
+                conflicts = {}
+                for team in teams:
+                    current_data = '%r-%r-%r' % (team['won'], team['diff'], team['score'])
+                    if current_data == last_data and current_data != '0-0-0':
+                        if last_data not in conflicts:
+                            conflicts[last_data] = [team['id'], last_team]
+                        else:
+                            conflicts[last_data].append(team['id'])
+                    last_data = current_data
+                    last_team = team['id']
+
+                direct_comp_query = QSqlQuery()
+                direct_comp_query.prepare(
+                    'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
+                    'COALESCE(Won, 0) as won, '
+                    'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
+                    'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
+                    'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
+                    'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
+                    'SUM(against) as Against FROM ( SELECT team1 as team, '
+                    'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
+                    'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
+                    ' FROM Matches WHERE tournament_stage = :stage_id '
+                    'AND team1 IN (:t1, :t2) AND team2 IN (:t1, :t2)'
+                    'UNION ALL SELECT team2 as team, '
+                    'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
+                    'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
+                    'FROM Matches WHERE tournament_stage = :stage_id '
+                    'AND team2 IN (:t1, :t2) AND team1 IN (:t1, :t2)'
+                    ') t '
+                    'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
+                    '(:t1, :t2) '
+                    ' ORDER By won DESC, diff DESC, score DESC, conceded')
+
+                direct_comp_query.bindValue(':stage_id', stage_id)
+
+                for conflict in conflicts:
+                    print('conflict in group %s: %r, %r' % (query.record().value('name'),
+                                                            conflict, conflicts[conflict]))
+                    direct_comp_query.bindValue(':t1', QVariant(conflicts[conflict][0]))
+                    direct_comp_query.bindValue(':t2', QVariant(conflicts[conflict][1]))
+                    self.execute_query(direct_comp_query)
+                    resolution = self.simple_get_multiple(direct_comp_query, ['id'])
+                    print(resolution)
+                    old_conf_teams = {}
+                    for i in range(0, len(teams)):
+                        if teams[i]['id'] in conflicts[conflict]:
+                            old_conf_teams[teams[i]['id']] = teams[i]
+                    for i in range(0, len(teams)):
+                        if teams[i]['id'] in conflicts[conflict]:
+                            teams[i] = old_conf_teams[resolution.pop(0)['id']]
+                    assert len(resolution) == 0
+
                 group_matches_query.bindValue(':g_id', query.record().value('id'))
                 self.execute_query(group_matches_query)
                 matches = self.simple_get_multiple(group_matches_query,
@@ -742,9 +825,9 @@ class DataBaseManager:
                           'FROM Matches UNION ALL SELECT team2 as team, '
                           'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
                           'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
-                          'FROM Matches) t GROUP BY team '
+                          'FROM Matches WHERE status = 2) t GROUP BY team '
                           'ORDER By won DESC, diff DESC, score DESC) '
-                          'as ewig JOIN Teams ON  ewig.team == Teams.id')
+                          'as ewig JOIN Teams ON  ewig.team = Teams.id')
             self.execute_query(query)
             teams = []
             # for each team

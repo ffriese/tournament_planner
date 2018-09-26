@@ -222,7 +222,7 @@ class TournamentMainWidget(QWidget):
                              },
             'manage_teams': {
                 'bt': QPushButton('Manage Teams', self),
-                'icon': QIcon('icons/application_side_list.png'),
+                'icon': QIcon('icons/application_view_list.png'),
                 'enabled': lambda stage, name, status: stage == 0 and status != TournamentStageStatus.COMPLETE
                 # groups not yet drawn
                              },
@@ -234,7 +234,7 @@ class TournamentMainWidget(QWidget):
                              },
             'draw_groups': {
                 'bt': QPushButton('Draw Groups', self),
-                'icon': QIcon('icons/text_padding_left.png'),
+                'icon': QIcon('icons/application_side_boxes.png'),
                 'enabled': lambda stage, name, status: stage == 0 and status != TournamentStageStatus.INITIALIZED
                 # as soon as teams are complete, until matches are generated
                              },

@@ -1,9 +1,9 @@
 import sys
 
-from PyQt5.QtCore import pyqtSignal, QDir, QCoreApplication, Qt
+from PyQt5.QtCore import pyqtSignal, QDir, QCoreApplication, Qt, QSize
 
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGridLayout, QSizePolicy, QStyle, QMainWindow, QToolBar
-from PyQt5.QtGui import QIcon, QImage
+from PyQt5.QtGui import QIcon, QImage, QPainter, QColor
 
 from widgets import TournamentWidget, AllTimeTableWidget
 from wizards import TournamentWizard
@@ -17,7 +17,7 @@ class App(QMainWindow):
         self.left = 10
         self.top = 10
         self.width = 1280
-        self.height = 1024
+        self.height = 700
         self.data = None
         self.database = DataBaseManager()
         self.setGeometry(self.left, self.top, self.width, self.height)
@@ -27,7 +27,10 @@ class App(QMainWindow):
                            'color: white')
         self.toolbar = QToolBar("Main")
         self.addToolBar(Qt.BottomToolBarArea, self.toolbar)
-        self.homeAction = self.toolbar.addAction(QIcon('icons/house.png'), 'Home')
+        self.homeAction = self.toolbar.addAction(QIcon('icons/home_large.png'), 'Home')
+        self.syncAction = self.toolbar.addAction(QIcon('icons/web_database.png'), 'Sync with FlunkyRock.de')
+        # self.syncAction.setEnabled(False)
+        self.database.sync_status.connect(self.update_remote_icon)
         # self.homeMenu = self.menuBar().addMenu('Home')
         # self.testAction = self.homeMenu.addAction('test')
         # self.homeAction = self.menuBar().addAction('Home')
@@ -59,7 +62,6 @@ class App(QMainWindow):
 
     def switch_central_widget(self, widget):
         self.centralWidget().setParent(None)  # prevent_deletion
-        #self.centralWidget().hide()
         self.setCentralWidget(widget)
         widget.show()
 
@@ -91,6 +93,30 @@ class App(QMainWindow):
                 self.homeWidget.tournament_opened.connect(self.open_tournament)
                 self.homeWidget.tournament_created.connect(self.create_tournament)
                 self.go_home()
+
+    def update_remote_icon(self, sync_status):
+        icon = QIcon('icons/web_database.png')
+        queue_size = sync_status['queue_size']
+        if queue_size > 0:
+            px = icon.pixmap(QSize(128, 128))
+            painter = QPainter()
+            painter.begin(px)
+            painter.setPen(QColor(255, 0, 0))
+            painter.setBrush(QColor(255, 0, 0))
+            painter.drawEllipse(0, 60, 68, 68)
+
+            painter.setPen(QColor(255, 255, 255))
+            painter.setBrush(QColor(255, 255, 255))
+            font = painter.font()
+            font.setPixelSize(45)
+            font.setWeight(40)
+            painter.setFont(font)
+            painter.drawText(0, 60, 68, 68, Qt.AlignHCenter | Qt.AlignVCenter, str(queue_size))
+            painter.end()
+            self.syncAction.setIcon(QIcon(px))
+        else:
+            self.syncAction.setIcon(icon)
+        # self.syncAction.setEnabled(sync_status['internet'])
 
 
 class HomeWidget(QWidget):
