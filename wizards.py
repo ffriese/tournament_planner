@@ -30,7 +30,9 @@ class TournamentWizard(QWizard):
         data = {
                 'name': self.namePage.lineEdit.text(),
                 # todo: create style-selector
-                'stylesheet':  'background-color: rgb(161,58,139); color: rgb(255,255,255)',
+                'stylesheet':  '*{background-color: rgb(161,58,139); color: rgb(255,255,255)} '
+                               '*[highlighted]{color: rgb(40,154,183)}'
+                               '*[bg_img]{background-image: url(bg_imgs/2018.png)}',
                 'teams': [self.namePage.teamTable.itemWidget(self.namePage.teamTable.item(i)).currentText()
                           for i in range(0, self.namePage.teamTable.count())],
                 'group_size': int(self.tournamentSettingsPage.groupComboBox.currentData()),

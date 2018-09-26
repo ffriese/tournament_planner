@@ -2,14 +2,14 @@ import inspect
 import os
 from collections import OrderedDict
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal, QSortFilterProxyModel, QMimeData, QDataStream, QModelIndex, QPoint, \
-    QCoreApplication
-from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QFont, QDropEvent, QStandardItemModel, QDragMoveEvent, \
-    QDragLeaveEvent, QDragEnterEvent, QStandardItem
-from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QSizePolicy, QPushButton, QToolButton, \
+from PyQt5.QtCore import Qt, pyqtSignal, QSortFilterProxyModel, QModelIndex, QSysInfo, QSize
+
+from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QDropEvent, QStandardItemModel
+
+from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
-    QCompleter, QStyleOption, QStyle, QAbstractItemView, QItemDelegate, QSpinBox, QFrame, QDialog, QFormLayout, \
-    QRadioButton, QButtonGroup
+    QCompleter, QStyleOption, QStyle, QAbstractItemView, QSpinBox, QFrame, QDialog, QFormLayout, \
+    QRadioButton, QButtonGroup, QSplitter, QLayout
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -179,22 +179,25 @@ class TournamentWidget(QWidget):
     def update_tournament_teams(self, teams, changed=False):
         if changed:
             self.database.update_tournament_teams(self.tournament['id'], teams)
+            self.database.execute_remote_updates()
             self.update_tournament()
         self.show_main_page()
 
     def update_tournament_groups(self, groups):
         self.database.update_tournament_groups(self.tournament['id'], groups)
+        self.database.execute_remote_updates()
         self.update_tournament()
         self.show_main_page()
 
     def generate_matches(self, data):
         self.database.generate_matches(self.tournament['id'], data)
+        self.database.execute_remote_updates()
         self.update_tournament()
         self.show_main_page()
 
     def update_match(self, match):
-        print(match)
         self.database.update_match(match)
+        self.database.execute_remote_updates()
         self.update_tournament()
 
 
@@ -203,6 +206,7 @@ class TournamentMainWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
+        self.setProperty('bg_img', 'true')
         self.box_layout = QVBoxLayout()
         self.settings_layout = FlowLayout()
         self.stage_layout = FlowLayout()
@@ -296,6 +300,7 @@ class ManageTeamsWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.layout = QVBoxLayout()
+        self.setProperty('bg_img', 'true')
         self.layout.setContentsMargins(45, 0, 45, 0)
         self.teamTable = TeamSelectorWidget(self)
         self.accept_button = QPushButton('Accept')
@@ -324,6 +329,7 @@ class TeamSelectorWidget(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setFocusPolicy(Qt.NoFocus)
+        self.setProperty('bg_img', 'true')
         self.t_teams = None
         self.db_teams = None
         sheet = WidgetTools.find_stylesheet(self, return_as_dict=True)
@@ -423,6 +429,7 @@ class GroupDrawWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.v_layout = QVBoxLayout()
+        self.setProperty('bg_img', 'true')
         self.layout = QHBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.group_stage_widget = GroupStageWidget(parent=self, enable_drag_drop=True)
@@ -480,18 +487,27 @@ class GroupDrawWidget(QWidget):
 class GroupStageWidget(QWidget):
     match_edited = pyqtSignal(dict)
 
-    def __init__(self, parent=None, enable_drag_drop=False):
+    def __init__(self, parent=None, enable_drag_drop=False, show_upcoming_games=False):
         super().__init__(parent=parent)
         self.flow_layout = FlowLayout()
         self.widget = QWidget(self)
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.widget)
         self.scroll.setWidgetResizable(True)
+        self.widget.setProperty('bg_img', 'true')
         self.widget.setLayout(self.flow_layout)
         self.grid_layout = QGridLayout()
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self.grid_layout)
-        self.layout().addWidget(self.scroll)
+
+        if show_upcoming_games:
+            self.splitter = QSplitter(self)
+            self.layout().addWidget(self.splitter)
+            self.splitter.addWidget(self.scroll)
+            self.splitter.addWidget(MatchListWidget())
+            self.splitter.setSizes([200, 100])
+        else:
+            self.layout().addWidget(self.scroll)
         self.group_widgets = []
         self.drag_drop_enabled = enable_drag_drop
 
@@ -546,6 +562,7 @@ class GroupWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setLayout(QVBoxLayout())
+        # self.setProperty('bg_img', 'true')
         self.table = GroupTable(parent=self, )
         self.match_table = MatchTable(parent=self)
         self.match_table.match_edited.connect(self.match_edited)
@@ -582,6 +599,27 @@ class MatchTable(QTableWidget):
         if '*[highlighted]' in sheet.keys():
             if 'color' in sheet['*[highlighted]'].keys():
                 self.highlight_color = WidgetTools.css_color_to_rgb(sheet['*[highlighted]']['color'])
+
+        self.setProperty('transp_bg', 'true')
+        # self.setStyleSheet('background-color: rgba(255,255,255,0)')
+
+        if QSysInfo.productVersion() == '10':
+            self.setStyleSheet(
+                    "QHeaderView::section{"
+                    "border-top:0px solid #D8D8D8;"
+                    "border-left:0px solid #D8D8D8;"
+                    "border-right:1px solid #D8D8D8;"
+                    "border-bottom: 1px solid #D8D8D8;"
+                    "background-color:white;"
+                    "padding:4px;"
+                    "}"
+                    "QTableCornerButton::section{"
+                    "border-top:0px solid #D8D8D8;"
+                    "border-left:0px solid #D8D8D8;"
+                    "border-right:1px solid #D8D8D8;"
+                    "border-bottom: 1px solid #D8D8D8;"
+                    "background-color:white;"
+                    "}")
 
     def set_group(self, group, editable=False):
         matches = group['matches'] if group['matches'] is not None else []
@@ -651,6 +689,7 @@ class MatchTable(QTableWidget):
 class GroupTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
+        self.setAttribute(Qt.WA_TranslucentBackground)
         self.team_count = 0
         self.verticalHeader().setDefaultSectionSize(20)
         self.horizontalHeader().sectionPressed.disconnect()
@@ -789,6 +828,74 @@ class GroupTable(QTableWidget):
         source.clearFocus()
 
 
+class MatchListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        # self.layout = QGridLayout()
+        # self.layout.setContentsMargins(0, 0, 0, 0)
+        # self.layout.setSpacing(0)
+        # self.v_layout = QVBoxLayout()
+        # self.widget = QWidget(self)
+        # self.scroll = QScrollArea()
+        # self.scroll.setWidget(self.widget)
+        # self.scroll.setWidgetResizable(True)
+        # self.widget.setLayout(self.v_layout)
+        # self.setLayout(self.layout)
+        # self.setProperty('bg_img', 'true')
+
+        self.addItem(QListWidgetItem())
+        self.widget = FieldWidget()
+        #self.widget.set_group({'name':'A','size':4,'teams':[]})
+        self.item(0).setSizeHint(self.widget.sizeHint())
+        #self.item(0).setSizeHint(QSize(100,100))
+        self.setItemWidget(self.item(0), self.widget)
+
+
+class FieldWidget(QTableWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.verticalHeader().setDefaultSectionSize(20)
+        self.horizontalHeader().sectionPressed.disconnect()
+        #self.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        #self.verticalHeader().sectionPressed.disconnect()
+        #self.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        #self.verticalHeader().hide()
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        self.setColumnCount(6)
+        self.setRowCount(1)
+        self.setHorizontalHeaderLabels(['Time', '#', 'Group', 'Team1', 'Team2', ''])
+        self.init()
+
+    def init(self):
+        self.setItem(0, 0, QTableWidgetItem('12:15'))
+        self.setItem(0, 1, QTableWidgetItem('1'))
+        self.setItem(0, 2, QTableWidgetItem('A'))
+        self.setItem(0, 3, QTableWidgetItem('Flunkengötter'))
+        self.setItem(0, 4, QTableWidgetItem('Beardy Beer'))
+        self.setItem(0, 5, QTableWidgetItem(''))
+        self.setColumnWidth(0, 40)
+        self.setColumnWidth(1, 15)
+        self.setColumnWidth(2, 40)
+        self.setColumnWidth(3, 100)
+        self.setColumnWidth(4, 100)
+        self.setColumnWidth(6, 20)
+        self.recalculate_size()
+
+    def recalculate_size(self):
+
+        width = self.verticalHeader().width() + 4
+        height = self.horizontalHeader().height() + 4
+        for column in range(self.model().columnCount()):
+            width += self.columnWidth(column)
+        for row in range(self.model().rowCount()):
+            height += self.rowHeight(row)
+        self.setMinimumWidth(width)
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
+
+
 class TeamDrawListWidget(QListWidget):
     list_empty_changed = pyqtSignal(bool)
 
@@ -797,6 +904,7 @@ class TeamDrawListWidget(QListWidget):
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setDefaultDropAction(Qt.MoveAction)
         self.setDropIndicatorShown(False)
+        self.setProperty('bg_img', 'true')
 
     def dropEvent(self, event: QDropEvent):
         model = QStandardItemModel()
@@ -842,6 +950,7 @@ class GenerateMatchesWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
+        self.setProperty('bg_img', 'true')
         self.stage = None
         self.generate_button = QPushButton('Generate', parent=self)
         self.generate_button.clicked.connect(self.generate)
@@ -864,6 +973,7 @@ class EditMatchDialog(QDialog):
 
     def __init__(self, match, parent=None):
         super(EditMatchDialog, self).__init__(parent)
+        self.setProperty('bg_img', 'true')
         self.match = match
         self.setGeometry(self.geometry().x(), self.geometry().y(), 400, 150)
         self.setWindowTitle('Edit Match')
@@ -885,6 +995,7 @@ class EditMatchDialog(QDialog):
         self.status_group = QButtonGroup()
         self.status_widget = QWidget(self)
         self.status_widget.setLayout(QVBoxLayout())
+        self.status_widget.setProperty('transp_bg', 'true')
         for i in range(3):
             self.status_group.addButton(self.radios[i])
             self.radios[i].setProperty('status', i)
@@ -901,7 +1012,6 @@ class EditMatchDialog(QDialog):
     def match_accepted(self):
         score1 = self.t1_spin.value()
         score2 = self.t2_spin.value()
-        print(self.status_group.checkedButton())
         status = self.status_group.checkedButton().property('status')
 
         if status == 2 and \

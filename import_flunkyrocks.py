@@ -1,30 +1,32 @@
 import math
+from collections import OrderedDict
 
-from tools import DataBaseManager
+from tools import DataBaseManager, InsertNotUniqueException
 import csv
 
 
-flunky_rocks = {'2015': '*{background-color: rgb(30,143,158); color: rgb(0,0,80)}',
-                '2016': '*{background-color: rgb(70,190,130); color: rgb(0,80,0)}',
+flunky_rocks = {'2015': '*{background-color: rgb(30,143,158); color: rgb(0,0,80)}'
+                        '*[bg_img]{background-image: url(bg_imgs/2015.png)}'
+                        'QLabel, QLineEdit, QRadioButton{background-color: rgba(255, 255, 255, 0)} '
+                        '*[transp_bg="true"]{background-color: rgba(255, 255, 255, 0)}',
+                '2016': '*{background-color: rgb(70,190,130); color: rgb(0,80,0)}'
+                        '*[bg_img]{background-image: url(bg_imgs/2016.png)}'
+                        'QLabel, QLineEdit, QRadioButton{background-color: rgba(255, 255, 255, 0)} '
+                        '*[transp_bg="true"]{background-color: rgba(255, 255, 255, 0)}',
                 '2017': '*{background-color: rgb(174,56,52); color: rgb(255,255,255)} '
-                        '*[highlighted]{color: rgb(40,154,183)}'}
-
-# background-images are ugly if used globally, we will need to create specific images for different widget types
-# flunky_rocks = {'2015': 'background-color: rgb(30,143,158); background-image: url(imgs/2015.png); '
-#                       'color: rgb(0,0,80)',
-#               '2016': 'background-color: rgb(70,190,130); background-image: url(imgs/2016.png); '
-#                       'color: rgb(0,80,0)',
-#               '2017': 'background-color: rgb(174,56,52); background-image: url(imgs/2017.png); '
-#                       'color: rgb(255,255,255)'}
+                        '*[highlighted]{color: rgb(40,154,183)}'
+                        '*[bg_img]{background-image: url(bg_imgs/2017.png)}'
+                        'QLabel, QLineEdit, QRadioButton{background-color: rgba(255, 255, 255, 0)} '
+                        '*[transp_bg="true"]{background-color: rgba(255, 255, 255, 0)}'}
 
 database = DataBaseManager()
 
 for year in sorted(flunky_rocks.keys()):
-    groups = {}
-    matches = {}
-    teams = {}
-    ko_stages = {}
-    finals = {}
+    groups = OrderedDict()
+    matches = OrderedDict()
+    teams = OrderedDict()
+    ko_stages = OrderedDict()
+    finals = OrderedDict()
 
     with open('%s.csv' % year, 'r', encoding='utf-8') as csv_file:
         reader = csv.reader(csv_file, delimiter=';', quotechar='"')
@@ -59,11 +61,12 @@ for year in sorted(flunky_rocks.keys()):
                                    })
 
     for team in teams:
-        team_id = database.add_team(team)  # returns None on error (e.g. unique constraint failed)
-        print(team, team_id)
-        if team_id is None:  # None -> team may already exist
+        try:
+            team_id = database.add_team(team)
+        except InsertNotUniqueException as inu:
             team_id = database.get_team_id(team)
-            print(team, team_id)
+
+        # print(team, team_id)
         teams[team] = team_id
 
     group_size = int(math.ceil(float(len(teams)) / float(len(groups))))

@@ -17,7 +17,7 @@ class App(QMainWindow):
         self.left = 10
         self.top = 10
         self.width = 1280
-        self.height = 800
+        self.height = 1024
         self.data = None
         self.database = DataBaseManager()
         self.setGeometry(self.left, self.top, self.width, self.height)
@@ -84,6 +84,7 @@ class App(QMainWindow):
 
     def create_tournament(self, data):
         if self.database.store_tournament(data):
+            self.database.execute_remote_updates()
             self.fetch_data()
             if type(self.centralWidget()) == HomeWidget:
                 self.homeWidget = HomeWidget(self.data)
@@ -127,6 +128,7 @@ class HomeWidget(QWidget):
             bt.setIcon(QIcon('icons/favicon.ico'))
             bt.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             bt.setProperty('tournament', t)
+            bt.setProperty('bg_img', 'true')
             bt.clicked.connect(self.tournament_clicked)
             self.layout.addWidget(bt, row, col)
             if col == 0:
