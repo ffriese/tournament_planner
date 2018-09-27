@@ -29,16 +29,14 @@ class App(QMainWindow):
         self.addToolBar(Qt.BottomToolBarArea, self.toolbar)
         self.homeAction = self.toolbar.addAction(QIcon('icons/home_large.png'), 'Home')
         self.syncAction = self.toolbar.addAction(QIcon('icons/web_database.png'), 'Sync with FlunkyRock.de')
-        # self.syncAction.setEnabled(False)
-        self.database.sync_status.connect(self.update_remote_icon)
-        # self.homeMenu = self.menuBar().addMenu('Home')
-        # self.testAction = self.homeMenu.addAction('test')
-        # self.homeAction = self.menuBar().addAction('Home')
         self.homeAction.triggered.connect(self.go_home)
+        self.syncAction.triggered.connect(self.database.remote_queue.execute_updates)
+        self.database.remote_queue.sync_status.connect(self.update_remote_icon)
+        self.database.remote_queue.execute_updates()
         self.fetch_data()
         self.homeWidget = HomeWidget(self.data)
         self.tournamentWidget = TournamentWidget(self.database, self)
-        self.allTimeTableWidget = AllTimeTableWidget(self.database, self)
+        self.allTimeTableWidget = AllTimeTableWidget(self)
         self.tournamentWidget.hide()
         self.allTimeTableWidget.hide()
         self.setCentralWidget(self.homeWidget)
@@ -69,16 +67,18 @@ class App(QMainWindow):
         self.switch_central_widget(self.homeWidget)
 
     def show_all_time_table(self):
-        self.allTimeTableWidget.update_table()
+        all_time_table = self.database.get_all_time_table()
+        self.allTimeTableWidget.update_table(all_time_table)
         self.switch_central_widget(self.allTimeTableWidget)
 
     def open_tournament(self, tournament):
         try:
             t_teams = self.database.get_tournament_teams(tournament['id'])
             groups = self.database.get_tournament_groups(tournament['id'])
+            ko_stages = self.database.get_tournament_ko_stages(tournament['id'])
             status = self.database.get_tournament_status(tournament['id'])
             self.tournamentWidget.set_tournament(tournament, db_teams=self.data['Teams'],
-                                                 t_teams=t_teams, groups=groups, status=status)
+                                                 t_teams=t_teams, groups=groups, ko_stages=ko_stages, status=status)
             self.switch_central_widget(self.tournamentWidget)
             self.tournamentWidget.show_main_page()
         except DBException as e:
@@ -86,7 +86,7 @@ class App(QMainWindow):
 
     def create_tournament(self, data):
         if self.database.store_tournament(data):
-            self.database.execute_remote_updates()
+            self.database.remote_queue.execute_updates()
             self.fetch_data()
             if type(self.centralWidget()) == HomeWidget:
                 self.homeWidget = HomeWidget(self.data)

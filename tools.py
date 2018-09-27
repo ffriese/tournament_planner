@@ -1,5 +1,8 @@
 import math
+import pickle
+from collections import OrderedDict
 from enum import Enum
+from random import shuffle
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -66,21 +69,80 @@ def create_balanced_round_robin(list):
     return s
 
 
-class DataBaseManager(QObject):
-
+class RemoteQueue(QObject):
     sync_status = pyqtSignal(dict)
 
     def __init__(self):
         super().__init__()
-        self.db = QSqlDatabase.addDatabase('QSQLITE')
-        self.db.setDatabaseName('flunkyrock.db')
-        self.remote_queue = []
+        self.queue = []
+        self.file_name = 'remote_queue'
         remote_sync = False
         try:
             RemoteConnectionManager()
             self.ONLINE_MODE = remote_sync
         except NameError:
             self.ONLINE_MODE = False
+
+        try:
+            self.load()
+        except FileNotFoundError:
+            pass
+
+    def save(self):
+        with open(self.file_name, 'wb') as output:
+            pickle.dump(self.queue, output)
+
+    def load(self):
+        with open(self.file_name, 'rb') as input:
+            self.queue = pickle.load(input)
+
+    def queue_size(self):
+        return len(self.queue)
+
+    def extend(self, local_queue):
+        self.queue.extend(local_queue)
+        self.save()
+
+    @staticmethod
+    def internet_on():
+        try:
+            urlopen('http://flunkyrock.de', timeout=2)
+            return True
+        except URLError as err:
+            return False
+
+    def execute_updates(self):
+        success = True
+        queue_size = len(self.queue)
+
+        if self.ONLINE_MODE and self.internet_on():
+            self.sync_status.emit({'internet': True, 'queue_size': self.queue_size()})
+
+            while queue_size > 0 and success:
+                update = self.queue[0]
+                print('remote', update['action'], ' ==> ', update)
+                if self.ONLINE_MODE:
+                    success = RemoteConnectionManager.send_request(update)
+                else:
+                    success = True
+                if success:
+                    self.queue.pop(0)
+                    self.save()
+                    self.sync_status.emit({'internet': True, 'queue_size': self.queue_size()})
+                else:
+                    self.sync_status.emit({'internet': self.internet_on(), 'queue_size': self.queue_size()})
+
+        else:
+            self.sync_status.emit({'internet': False, 'queue_size': queue_size})
+
+
+class DataBaseManager(QObject):
+
+    def __init__(self):
+        super().__init__()
+        self.db = QSqlDatabase.addDatabase('QSQLITE')
+        self.db.setDatabaseName('flunkyrock.db')
+        self.remote_queue = RemoteQueue()
         self.init()
 
     def init(self):
@@ -223,37 +285,7 @@ class DataBaseManager(QObject):
 
         return update
 
-    @staticmethod
-    def internet_on():
-        try:
-            urlopen('http://flunkyrock.de', timeout=2)
-            return True
-        except URLError as err:
-            return False
 
-    def execute_remote_updates(self):
-        success = True
-        queue_size = len(self.remote_queue)
-
-        if self.ONLINE_MODE and self.internet_on():
-            self.sync_status.emit({'internet': True, 'queue_size': queue_size})
-
-            while queue_size > 0 and success:
-                update = self.remote_queue[0]
-                print('remote', update['action'], ' ==> ', update)
-                if self.ONLINE_MODE:
-                    success = RemoteConnectionManager.send_request(update)
-                else:
-                    success = True
-                if success:
-                    self.remote_queue.pop(0)
-                    queue_size = len(self.remote_queue)
-                    self.sync_status.emit({'internet': True, 'queue_size': queue_size})
-                else:
-                    self.sync_status.emit({'internet': self.internet_on(), 'queue_size': queue_size})
-
-        else:
-            self.sync_status.emit({'internet': False, 'queue_size': queue_size})
 
     # used for import-script
     def add_team(self, team_name):
@@ -366,12 +398,11 @@ class DataBaseManager(QObject):
                 self.create_remote_update('delete', 'Matches', [], [], where={'tournament_stage': [stage_id]}
                                           ))
         self.db.open()
-        self.db.transaction()
         local_update_queue = []
         try:
-            # TODO: DELETE OLD MATCHES FIRST!!!!!!!
             query = QSqlQuery()
 
+            print('db-open:', self.db.isOpen())
             if data['status'] == TournamentStageStatus.COMPLETE:
                 if data['next_stage'] is None:
                     raise AssertionError('TOURNAMENT COMPLETE, THIS SHOULD NEVER HAPPEN ANYHOW')
@@ -405,6 +436,8 @@ class DataBaseManager(QObject):
                                         schedule.append({'team1_id': teams[0]['id'],
                                                          'team2_id': teams[1]['id']})
                     print(schedule)
+
+                    self.db.transaction()
                     query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
                                   'VALUES (:t1, :t2, 0, :ts_id)')
                     query.bindValue(':t1', [QVariant(m['team1_id']) for m in schedule])
@@ -421,15 +454,222 @@ class DataBaseManager(QObject):
                         self.create_remote_update('insert', 'Matches', keys,
                                                   [[t[key] for t in value_dict] for key in keys]
                                                   ))
-                else:
-                    print('TODO: DO CRAZY KO-STAGE STUFF')
-                    # TODO: DO CRAZY KO-STAGE STUFF
-                    pass
+
+                    self.db.commit()
+                    self.remote_queue.extend(local_update_queue)
+                elif data['next_stage']['name'].startswith('KO_FINAL'):
+                    print('TODO: DO CRAZY FINAL STUFF')
+
+                elif data['next_stage']['name'].startswith('KO'):
+                    match_count = int(data['next_stage']['name'][2:3])
+                    team_count = match_count * 2
+                    groups = self.get_tournament_groups(tournament_id)
+                    self.db.open()
+                    direct_qualification = math.floor(team_count/len(groups))
+                    qualified = []
+                    pots = [[] for i in range(direct_qualification)]
+
+                    for group in groups:
+                        for q in range(direct_qualification):
+                            direct = group['teams'].pop(0)
+                            qualified.append(direct)
+                            pots[q].append(direct['name'])
+                    if len(qualified) < team_count:
+                        # fill the rest of the spots with the next best teams...
+                        left_over_teams = []
+                        for group in groups:
+                            for t in group['teams']:
+                                left_over_teams.append(t['id'])
+                        team_replacement = '(%s)' % ', '.join(['%r' % t for t in left_over_teams])
+                        query.prepare(
+                            'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
+                            'COALESCE(Won, 0) as won, '
+                            'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
+                            'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
+                            'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
+                            'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
+                            'SUM(against) as Against FROM ( SELECT team1 as team, '
+                            'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
+                            'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
+                            ' FROM Matches WHERE tournament_stage = :stage_id '
+                            'UNION ALL SELECT team2 as team, '
+                            'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
+                            'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
+                            'FROM Matches WHERE tournament_stage = :stage_id '
+                            ') t '
+                            'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
+                            '%s'
+                            ' ORDER By won DESC, diff DESC, score DESC, conceded' % team_replacement)
+                        query.bindValue(':stage_id', data['current_stage_id'])
+
+                        self.execute_query(query)
+                        table = self.simple_get_multiple(query, ['id', 'name', 'won', 'diff'])
+                        for i in range(team_count-len(qualified)):
+                            qualified.append(table.pop(0))
+
+                    print('qualified:', [t['name'] for t in qualified])
+                    # todo: use pots maybe?
+                    shuffle(qualified)
+                    schedule = []
+                    while len(qualified) > 0:
+                        teams = [qualified.pop(0), qualified.pop(0)]
+                        print('KO-Match: %s - %s' % (teams[0]['name'], teams[1]['name']))
+                        schedule.append({'team1_id': teams[0]['id'],
+                                         'team2_id': teams[1]['id']})
+
+                    self.db.transaction()
+                    query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
+                                  'VALUES (:t1, :t2, 0, :ts_id)')
+                    query.bindValue(':t1', [QVariant(m['team1_id']) for m in schedule])
+                    query.bindValue(':t2', [QVariant(m['team2_id']) for m in schedule])
+                    query.bindValue(':ts_id', [QVariant(data['next_stage']['id']) for m in schedule])
+                    self.execute_query(query, batch=True)
+
+                    query.prepare('SELECT * FROM Matches WHERE tournament_stage = :t_id')
+                    query.bindValue(':t_id', data['next_stage']['id'])
+                    self.execute_query(query)
+                    keys = ['id', 'team1', 'team2', 'status', 'tournament_stage']
+                    value_dict = self.simple_get_multiple(query, keys)
+                    local_update_queue.append(
+                        self.create_remote_update('insert', 'Matches', keys,
+                                                  [[t[key] for t in value_dict] for key in keys]
+                                                  ))
+
+                    self.db.commit()
+                    self.remote_queue.extend(local_update_queue)
+
             elif data['status'] == TournamentStageStatus.INITIALIZED:
                 # TODO: REGENERATE, FOR THIS WE WILL NEED TO AMEND THE CURRENT_STAGE-INFORMATION
-                pass
+                print('REGENERATION OF MATCHES IS NOT YET POSSIBLE')
             else:
                 raise AssertionError('STAGE ALREADY IN PROGRESS, THIS SHOULD NEVER HAPPEN ANYHOW')
+
+        except DBException as ex:
+            print('db_error:', ex, ex.get_last_query())
+            self.db.rollback()
+        finally:
+            self.db.close()
+
+    def update_tournament_stages(self, tournament_id, num_teams, group_size, teams_in_ko):
+        print('create new stages. teams:', num_teams, 'group_size:', group_size)
+        self.db.open()
+        self.db.transaction()
+        local_update_queue = []
+        query = QSqlQuery()
+        try:
+
+            # delete all current stages
+
+            # get stage_ids
+            query.prepare('SELECT * FROM Tournament_Stages WHERE tournament = :tournament_id')
+            query.bindValue(':tournament_id', tournament_id)
+            self.execute_query(query)
+            stages = self.simple_get_multiple(query, ['id', 'name'])
+            for stage in stages:
+                if stage['name'] == 'GROUP':
+                    # delete groups
+                    query.prepare('DELETE FROM Groups WHERE group_stage = :stage_id')
+                    query.bindValue(':stage_id', stage['id'])
+                    self.execute_query(query)
+
+                    local_update_queue.append(self.create_remote_update('delete', 'Groups', [], [],
+                                                                        where={'group_stage': [stage['id']]}))
+                    # delete group-stage-entry
+                    query.prepare('DELETE FROM Group_Stages WHERE tournament_stage = :stage_id')
+                    query.bindValue(':stage_id', stage['id'])
+                    self.execute_query(query)
+
+                    local_update_queue.append(self.create_remote_update('delete', 'Group_Stages', [], [],
+                                                                        where={'tournament_stage': [stage['id']]}))
+                else:
+                    # delete ko-stage-entry
+                    query.prepare('DELETE FROM KO_Stages WHERE tournament_stage = :stage_id')
+                    query.bindValue(':stage_id', stage['id'])
+                    self.execute_query(query)
+
+                    local_update_queue.append(self.create_remote_update('delete', 'KO_Stages', [], [],
+                                                                        where={'tournament_stage': [stage['id']]}))
+            # delete tournament-stage-entry
+            query.prepare('DELETE FROM Tournament_Stages WHERE tournament = :tournament_id')
+            query.bindValue(':tournament_id', tournament_id)
+            self.execute_query(query)
+
+            local_update_queue.append(self.create_remote_update('delete', 'Tournament_Stages', [], [],
+                                                                where={'tournament': [tournament_id]}))
+
+            # create group_stage
+            query.prepare('INSERT INTO Tournament_Stages(tournament, stage_index, name) VALUES (:t_id, 1, "GROUP")')
+            query.bindValue(':t_id', tournament_id)
+            self.execute_query(query)
+            ts_id = self.get_current_id('Tournament_Stages')
+
+            local_update_queue.append(self.create_remote_update('insert', 'Tournament_Stages',
+                                                                ['id', 'tournament', 'stage_index', 'name'],
+                                                                [[ts_id], [tournament_id], [1], ['GROUP']]
+                                                                ))
+
+            query.prepare('INSERT INTO Group_Stages(tournament_stage) VALUES (:ts_id)')
+            query.bindValue(':ts_id', ts_id)
+            self.execute_query(query)
+
+            local_update_queue.append(self.create_remote_update('insert', 'Group_Stages',
+                                                                ['tournament_stage'],
+                                                                [[ts_id]]
+                                                                ))
+
+            query.prepare('INSERT INTO Groups(group_stage, size, name) VALUES(:gs_id, :size, :name)')
+            for g in range(0, int(math.ceil(num_teams / group_size))):
+                query.bindValue(':gs_id', ts_id)
+                query.bindValue(':size', group_size)
+                query.bindValue(':name', str(chr(g + 65)))
+                self.execute_query(query)
+                g_id = self.get_current_id('Groups')
+
+                local_update_queue.append(self.create_remote_update('insert', 'Groups',
+                                                                    ['id', 'group_stage', 'size', 'name'],
+                                                                    [[g_id], [ts_id], [group_size],
+                                                                     [str(chr(g + 65))]]
+                                                                    ))
+
+            # create ko-stages including 3rd place final
+            index = 2
+            while teams_in_ko >= 1:
+                query.prepare('INSERT INTO Tournament_Stages(tournament, stage_index, name) VALUES (:t_id, :idx, :name)')
+                query.bindValue(':t_id', tournament_id)
+                query.bindValue(':idx', index)
+                if teams_in_ko > 2:
+                    query.bindValue(':name', 'KO%r' % int(teams_in_ko / 2))
+                elif teams_in_ko == 2:
+                    if index > 2:
+                        query.bindValue(':name', 'KO_FINAL_3')
+                    else:
+                        query.bindValue(':name', 'KO_FINAL_1')
+                else:
+                    if index > 3:
+                        query.bindValue(':name', 'KO_FINAL_1')
+                    else:
+                        break
+
+                self.execute_query(query)
+                ts_id = self.get_current_id('Tournament_Stages')
+
+                local_update_queue.append(self.create_remote_update('insert', 'Tournament_Stages',
+                                                                    ['id', 'tournament', 'stage_index', 'name'],
+                                                                    [[ts_id], [tournament_id], [index],
+                                                                     [query.boundValue(':name')]]
+                                                                    ))
+
+                query.prepare('INSERT INTO KO_Stages(tournament_stage) VALUES (:ts_id)')
+                query.bindValue(':ts_id', ts_id)
+                self.execute_query(query)
+
+                local_update_queue.append(self.create_remote_update('insert', 'KO_Stages',
+                                                                    ['tournament_stage'],
+                                                                    [[ts_id]]
+                                                                    ))
+                index += 1
+                teams_in_ko /= 2
+
             self.db.commit()
             self.remote_queue.extend(local_update_queue)
         except DBException as ex:
@@ -438,12 +678,24 @@ class DataBaseManager(QObject):
         finally:
             self.db.close()
 
-    def update_tournament_teams(self, tournament_id, teams):
+    def update_tournament_teams(self, tournament_id, teams, num_teams):
         self.db.open()
         local_update_queue = []
         self.db.transaction()
         try:
             query = QSqlQuery()
+            # set number of teams in database
+            query.prepare('UPDATE Tournaments SET num_teams = :num_teams WHERE id = :id')
+            query.bindValue(':num_teams', num_teams)
+            query.bindValue(':id', tournament_id)
+            self.execute_query(query)
+
+            local_update_queue.append(self.create_remote_update('update', 'Tournaments',
+                                                                ['num_teams'],
+                                                                [[num_teams]],
+                                                                where={'id': [tournament_id]}
+                                                                ))
+
             # add all new teams to database
             query.prepare('INSERT INTO Teams(name) VALUES (:name)')
             ids = []
@@ -614,6 +866,7 @@ class DataBaseManager(QObject):
                 if stage['expected_matches'] > 0:
                     if stage['expected_matches'] == stage['complete_matches']:
                         current_status = {
+                            'current_stage_id': stage['id'],
                             'current_stage': stage_index,
                             'name': stage['name'],
                             'status': TournamentStageStatus.COMPLETE,
@@ -623,6 +876,7 @@ class DataBaseManager(QObject):
                     elif stage['expected_matches'] == match_sum and \
                             (stage['matches_in_progress'] > 0 or stage['complete_matches'] > 0):
                         current_status = {
+                            'current_stage_id': stage['id'],
                             'current_stage': stage_index,
                             'name': stage['name'],
                             'status': TournamentStageStatus.IN_PROGRESS
@@ -631,6 +885,7 @@ class DataBaseManager(QObject):
                     elif stage['scheduled_matches'] == stage['expected_matches'] and \
                             prev_stage_complete(stage_index, current_status):
                         current_status = {
+                            'current_stage_id': stage['id'],
                             'current_stage': stage_index,
                             'name': stage['name'],
                             'status': TournamentStageStatus.INITIALIZED
@@ -662,6 +917,38 @@ class DataBaseManager(QObject):
             query.prepare('SELECT * FROM Teams')
             self.execute_query(query)
             return self.simple_get_multiple(query, ['id', 'name'])
+        finally:
+            self.db.close()
+
+    def get_tournament_ko_stages(self, tournament_id):
+        self.db.open()
+        ko_matches_query = QSqlQuery()
+        try:
+            ko_matches_query.prepare('SELECT Matches.id as id, tournament_stage, T1.id as team1_id, T2.id as team2_id, '
+                                     'Tournament_Stages.name as stage_name, field, status, '
+                                     'tournament, T1.name as team1, T2.name as team2, team1_score, team2_score, status '
+                                     'FROM Matches '
+                                     'JOIN Tournament_Stages ON Tournament_Stages.id = Matches.tournament_stage '
+                                     'join Teams as T1 on Matches.team1 = T1.id '
+                                     'join Teams as T2 on Matches.team2 = T2.id '
+                                     'WHERE tournament = :t_id and Tournament_Stages.name != "GROUP"')
+            ko_matches_query.bindValue(':t_id', tournament_id)
+            self.execute_query(ko_matches_query)
+            ko_matches = self.simple_get_multiple(ko_matches_query,
+                                                  ['id', 'tournament_stage', 'stage_name',
+                                                   'team1_id', 'team2_id', 'team1', 'team2',
+                                                   'team1_score', 'team2_score',
+                                                   'status', 'field'])
+            stages = OrderedDict()
+            for m in ko_matches:
+                if m['tournament_stage'] not in stages:
+                    stages[m['tournament_stage']] = {}
+                    stages[m['tournament_stage']]['name'] = m['stage_name']
+                    stages[m['tournament_stage']]['id'] = m['id']
+                    stages[m['tournament_stage']]['matches'] = []
+                stages[m['tournament_stage']]['matches'].append(m)
+
+            return stages
         finally:
             self.db.close()
 
@@ -753,38 +1040,41 @@ class DataBaseManager(QObject):
                     last_team = team['id']
 
                 direct_comp_query = QSqlQuery()
-                direct_comp_query.prepare(
-                    'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
-                    'COALESCE(Won, 0) as won, '
-                    'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
-                    'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
-                    'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
-                    'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
-                    'SUM(against) as Against FROM ( SELECT team1 as team, '
-                    'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
-                    'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
-                    ' FROM Matches WHERE tournament_stage = :stage_id '
-                    'AND team1 IN (:t1, :t2) AND team2 IN (:t1, :t2)'
-                    'UNION ALL SELECT team2 as team, '
-                    'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
-                    'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
-                    'FROM Matches WHERE tournament_stage = :stage_id '
-                    'AND team2 IN (:t1, :t2) AND team1 IN (:t1, :t2)'
-                    ') t '
-                    'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
-                    '(:t1, :t2) '
-                    ' ORDER By won DESC, diff DESC, score DESC, conceded')
-
-                direct_comp_query.bindValue(':stage_id', stage_id)
-
                 for conflict in conflicts:
                     print('conflict in group %s: %r, %r' % (query.record().value('name'),
                                                             conflict, conflicts[conflict]))
-                    direct_comp_query.bindValue(':t1', QVariant(conflicts[conflict][0]))
-                    direct_comp_query.bindValue(':t2', QVariant(conflicts[conflict][1]))
+                    team_replacement = '(%s)' % ','.join([':t%r' % t for t in conflicts[conflict]])
+                    direct_comp_query.prepare(
+                        'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
+                        'COALESCE(Won, 0) as won, '
+                        'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
+                        'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
+                        'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
+                        'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
+                        'SUM(against) as Against FROM ( SELECT team1 as team, '
+                        'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
+                        'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
+                        ' FROM Matches WHERE tournament_stage = :stage_id '
+                        'AND team1 IN %s AND team2 IN %s'
+                        'UNION ALL SELECT team2 as team, '
+                        'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
+                        'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
+                        'FROM Matches WHERE tournament_stage = :stage_id '
+                        'AND team2 IN %s AND team1 IN %s'
+                        ') t '
+                        'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
+                        '%s '
+                        ' ORDER By won DESC, diff DESC, score DESC, conceded' % (team_replacement,
+                                                                                 team_replacement,
+                                                                                 team_replacement,
+                                                                                 team_replacement,
+                                                                                 team_replacement))
+
+                    direct_comp_query.bindValue(':stage_id', stage_id)
+                    for t in conflicts[conflict]:
+                        direct_comp_query.bindValue(':t%r' % t, QVariant(t))
                     self.execute_query(direct_comp_query)
                     resolution = self.simple_get_multiple(direct_comp_query, ['id'])
-                    print(resolution)
                     old_conf_teams = {}
                     for i in range(0, len(teams)):
                         if teams[i]['id'] in conflicts[conflict]:
@@ -966,6 +1256,7 @@ class DataBaseManager(QObject):
 
     # data.keys = ['group_size': int, 'name': str, 'teams_in_ko': int, 'teams': list(str)}
     def store_tournament(self, data):
+        print(data)
         self.db.open()
         local_update_queue = []
         query = QSqlQuery()
@@ -974,7 +1265,7 @@ class DataBaseManager(QObject):
             query.prepare('INSERT INTO Tournaments(name, stylesheet, num_teams) VALUES (:name, :stylesheet, :num_teams)')
             query.bindValue(':name', data['name'])
             query.bindValue(':stylesheet', data['stylesheet'])
-            query.bindValue(':num_teams', len(data['teams']))
+            query.bindValue(':num_teams', data['num_teams'])
             self.execute_query(query)
             tournament_id = self.get_current_id('Tournaments')
 
@@ -1057,34 +1348,34 @@ class DataBaseManager(QObject):
                 teams_in_ko /= 2
 
             # add teams
+            # maybe we can skip the query with the id information
             query.exec_('SELECT * FROM Teams')
             db_teams = {}
             while query.next():
                 db_teams[query.value('name')] = query.value('id')
             for team in data['teams']:
-                if team != '':
-                    if team in db_teams:
-                        team_id = db_teams[team]
-                    else:
-                        query.prepare('INSERT INTO Teams(name) VALUES(:team)')
-                        query.bindValue(':team', team)
-                        self.execute_query(query)
-                        team_id = self.get_current_id('Teams')
-
-                        local_update_queue.append(self.create_remote_update('insert', 'Teams',
-                                                                            ['id', 'name'],
-                                                                            [[team_id], [team]]
-                                                                            ))
-
-                    query.prepare('INSERT INTO Tournament_Teams(tournament, team) VALUES(:tour_id, :team_id)')
-                    query.bindValue(':tour_id', tournament_id)
-                    query.bindValue(':team_id', team_id)
+                if team['name'] in db_teams:
+                    team_id = db_teams[team['name']]
+                else:
+                    query.prepare('INSERT INTO Teams(name) VALUES(:team)')
+                    query.bindValue(':team', team['name'])
                     self.execute_query(query)
+                    team_id = self.get_current_id('Teams')
 
-                    local_update_queue.append(self.create_remote_update('insert', 'Tournament_Teams',
-                                                                        ['tournament', 'team'],
-                                                                        [[tournament_id], [team_id]]
+                    local_update_queue.append(self.create_remote_update('insert', 'Teams',
+                                                                        ['id', 'name'],
+                                                                        [[team_id], [team['name']]]
                                                                         ))
+
+                query.prepare('INSERT INTO Tournament_Teams(tournament, team) VALUES(:tour_id, :team_id)')
+                query.bindValue(':tour_id', tournament_id)
+                query.bindValue(':team_id', team_id)
+                self.execute_query(query)
+
+                local_update_queue.append(self.create_remote_update('insert', 'Tournament_Teams',
+                                                                    ['tournament', 'team'],
+                                                                    [[tournament_id], [team_id]]
+                                                                    ))
 
             self.db.commit()
             print('added %s to db' % data['name'])

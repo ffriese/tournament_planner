@@ -1,15 +1,17 @@
 import inspect
+import math
 import os
+import random
 from collections import OrderedDict
 
 from PyQt5.QtCore import Qt, pyqtSignal, QSortFilterProxyModel, QModelIndex, QSysInfo, QSize
 
-from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QDropEvent, QStandardItemModel
+from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QDropEvent, QStandardItemModel, QWheelEvent
 
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
     QCompleter, QStyleOption, QStyle, QAbstractItemView, QSpinBox, QFrame, QDialog, QFormLayout, \
-    QRadioButton, QButtonGroup, QSplitter, QLayout
+    QRadioButton, QButtonGroup, QSplitter, QLineEdit
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -39,7 +41,6 @@ class WidgetTools:
                         selectors[_key.strip()] = _val.strip()
             return selectors
 
-        #widget_style = {}
         selector_style = OrderedDict()
         parent_list = [widget]
         p = widget
@@ -61,14 +62,9 @@ class WidgetTools:
                     sel_style = extract_styles(p_sels[sel])
                     for key in sel_style:
                         selector_style[sel][key] = sel_style[key]
-            #p_style = extract_styles(p.styleSheet())
-            #for key in p_style:
-            #    widget_style[key] = p_style[key]
         if return_as_dict:
-            #return widget_style
             return selector_style
         else:
-            #return ';'.join(['%s:%s' % (key, widget_style[key]) for key in widget_style])
             sheet = ''
             for selector in selector_style:
                 sheet += '%s{%s}' % (selector,
@@ -120,13 +116,14 @@ class TournamentWidget(QWidget):
         self.layout.addWidget(self.main_widget)
         self.widgets = {
             'groups': GroupStageWidget(self),
-            'manage_teams': ManageTeamsWidget(self),
             'draw_groups': GroupDrawWidget(self),
-            'generate_matches': GenerateMatchesWidget(self)
+            'generate_matches': GenerateMatchesWidget(self),
+            'tournament_settings': TournamentSettingsWidget(self),
+            'ko_stage': KOStageWidget(self)
         }
         for widget_name in self.widgets:
             self.layout.addWidget(self.widgets[widget_name])
-        self.widgets['manage_teams'].teams_changed.connect(self.update_tournament_teams)
+        self.widgets['tournament_settings'].tournament_updated.connect(self.update_tournament_settings)
         self.widgets['draw_groups'].groups_drawn.connect(self.update_tournament_groups)
         self.widgets['generate_matches'].match_generation_requested.connect(self.generate_matches)
         self.widgets['groups'].match_edited.connect(self.update_match)
@@ -145,8 +142,7 @@ class TournamentWidget(QWidget):
             self.main_page_button.show()
             self.widgets[widget_name].show()
 
-    def set_tournament(self, tournament, db_teams=None, t_teams=None, groups=None, status=None):
-        print(status)
+    def set_tournament(self, tournament, db_teams=None, t_teams=None, groups=None, ko_stages=None, status=None):
         self.tournament = tournament
         self.setStyleSheet(tournament['stylesheet'])
         self.nameLabel.setText(tournament['name'])
@@ -154,6 +150,8 @@ class TournamentWidget(QWidget):
             db_teams = []
         if t_teams is None:
             t_teams = []
+        if ko_stages is None:
+            ko_stages = []
         self.db_teams = db_teams
         self.t_teams = t_teams
         if groups is not None:
@@ -161,43 +159,60 @@ class TournamentWidget(QWidget):
                 editable = status['name'] == 'GROUP'
             except KeyError:
                 editable = False
+            self.widgets['tournament_settings'].set_teams(t_teams=t_teams, db_teams=db_teams,
+                                                          group_size=groups[0]['size'] if len(groups) > 0 else None,
+                                                          tournament=tournament, status=status)
             self.widgets['groups'].set_groups(groups, editable=editable)
             self.widgets['draw_groups'].set_groups_and_teams(groups, t_teams)
-        self.widgets['manage_teams'].set_teams(t_teams=t_teams, db_teams=db_teams, count=tournament['num_teams'])
+            self.widgets['ko_stage'].set_stages(ko_stages, editable=True)
         self.widgets['generate_matches'].set_stage(status)
         if status is not None:
             self.main_widget.set_status(status)
 
     def update_tournament(self):
         db_teams = self.database.get_teams()
+        data = self.database.read_data(['Tournaments'])
+        for t in data['Tournaments']:
+            if t['id'] == self.tournament['id']:
+                self.tournament = t
         t_teams = self.database.get_tournament_teams(self.tournament['id'])
+        ko_stages = self.database.get_tournament_ko_stages(self.tournament['id'])
         groups = self.database.get_tournament_groups(self.tournament['id'])
         status = self.database.get_tournament_status(self.tournament['id'])
         self.set_tournament(self.tournament, db_teams=db_teams,
-                            t_teams=t_teams, groups=groups, status=status)
+                            t_teams=t_teams, groups=groups, ko_stages=ko_stages, status=status)
 
     def update_tournament_teams(self, teams, changed=False):
         if changed:
             self.database.update_tournament_teams(self.tournament['id'], teams)
-            self.database.execute_remote_updates()
+            self.database.remote_queue.execute_updates()
             self.update_tournament()
+        self.show_main_page()
+
+    def update_tournament_settings(self, data):
+        if 'teams' in data:
+            self.database.update_tournament_teams(self.tournament['id'], data['teams'], data['num_teams'])
+            self.database.update_tournament_stages(self.tournament['id'], data['num_teams'], data['group_size'],
+                                                   data['teams_in_ko'])
+        self.database.remote_queue.execute_updates()
+        self.update_tournament()
         self.show_main_page()
 
     def update_tournament_groups(self, groups):
         self.database.update_tournament_groups(self.tournament['id'], groups)
-        self.database.execute_remote_updates()
+        self.database.remote_queue.execute_updates()
         self.update_tournament()
         self.show_main_page()
 
     def generate_matches(self, data):
         self.database.generate_matches(self.tournament['id'], data)
-        self.database.execute_remote_updates()
+        self.database.remote_queue.execute_updates()
         self.update_tournament()
         self.show_main_page()
 
     def update_match(self, match):
         self.database.update_match(match)
-        self.database.execute_remote_updates()
+        self.database.remote_queue.execute_updates()
         self.update_tournament()
 
 
@@ -212,19 +227,13 @@ class TournamentMainWidget(QWidget):
         self.stage_layout = FlowLayout()
         self.view_layout = FlowLayout()
         self.settings_buttons = ['tournament_settings']
-        self.stage_buttons = ['manage_teams', 'draw_groups', 'generate_matches']
+        self.stage_buttons = ['draw_groups', 'generate_matches']
         self.view_buttons = ['groups', 'ko_stage']
         self.buttons = {
             'tournament_settings': {
                 'bt': QPushButton('Tournament Settings', self),
                 'icon': QIcon('icons/application_edit.png'),
                 'enabled': lambda stage, name, status: True
-                             },
-            'manage_teams': {
-                'bt': QPushButton('Manage Teams', self),
-                'icon': QIcon('icons/application_view_list.png'),
-                'enabled': lambda stage, name, status: stage == 0 and status != TournamentStageStatus.COMPLETE
-                # groups not yet drawn
                              },
             'groups': {
                 'bt': QPushButton('Groups', self),
@@ -294,26 +303,39 @@ class TournamentMainWidget(QWidget):
                 self.buttons[button]['bt'].hide()
 
 
-class ManageTeamsWidget(QWidget):
-    teams_changed = pyqtSignal(list, bool)
+class TournamentSettingsWidget(QWidget):
+    tournament_updated = pyqtSignal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self.layout = QVBoxLayout()
         self.setProperty('bg_img', 'true')
-        self.layout.setContentsMargins(45, 0, 45, 0)
-        self.teamTable = TeamSelectorWidget(self)
-        self.accept_button = QPushButton('Accept')
-        self.accept_button.clicked.connect(self.accepted)
-        self.layout.addWidget(self.teamTable)
+        self.tmw = ManageTournamentWidget(self)
+        self.accept_button = QPushButton('Accept Changes')
+        self.accept_button.clicked.connect(self.update_tournament)
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.tmw)
         self.layout.addWidget(self.accept_button)
         self.setLayout(self.layout)
 
-    def accepted(self):
-        if self.teamTable.get_teams() is None:
-            self.teams_changed.emit([], False)
-        else:
-            self.teams_changed.emit(self.teamTable.get_teams(), True)
+    def update_tournament(self):
+        self.tournament_updated.emit(self.tmw.get_data())
+
+    def set_teams(self, t_teams, db_teams, tournament, group_size, status):
+        self.tmw.set_teams(db_teams=db_teams, tournament=tournament, t_teams=t_teams, group_size=group_size)
+        if status:
+            manage_teams = status['current_stage'] == 0 and status['status'] != TournamentStageStatus.COMPLETE
+            edit_finals = manage_teams
+            edit_group_size = manage_teams
+            edit_tournament_name = False
+            self.tmw.set_status(manage_teams=manage_teams,
+                                edit_tournament_name=edit_tournament_name,
+                                edit_group_size=edit_group_size,
+                                edit_finals=edit_finals)
+            if edit_finals is False and edit_group_size is False \
+                    and edit_tournament_name is False and manage_teams is False:
+                self.accept_button.hide()
+            else:
+                self.accept_button.show()
 
     def paintEvent(self, q_paint_event):
         opt = QStyleOption()
@@ -321,17 +343,14 @@ class ManageTeamsWidget(QWidget):
         p = QPainter(self)
         self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
 
-    def set_teams(self, t_teams, db_teams, count):
-        self.teamTable.set_teams(db_teams=db_teams, count=count, t_teams=t_teams)
-
 
 class TeamSelectorWidget(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setFocusPolicy(Qt.NoFocus)
-        self.setProperty('bg_img', 'true')
-        self.t_teams = None
-        self.db_teams = None
+        self.t_teams = []
+        self.db_teams = []
+        self.team_selection_enabled = True
         sheet = WidgetTools.find_stylesheet(self, return_as_dict=True)
         self.number_color = None
         self.number_font_weight = None
@@ -346,6 +365,11 @@ class TeamSelectorWidget(QListWidget):
                     else:
                         self.number_font_weight = weight
 
+    def set_status(self, status):
+        self.team_selection_enabled = status
+        for i in range(self.count()):
+            self.itemWidget(self.item(i)).setEnabled(status)
+
     def set_teams(self, db_teams, count, t_teams=None):
         self.t_teams = t_teams
         self.db_teams = db_teams
@@ -359,7 +383,7 @@ class TeamSelectorWidget(QListWidget):
                 self.add_team_item()
         self.team_selected()
 
-    def get_teams(self):
+    def get_teams(self, none_on_no_change=False):
         teams = []
         db_ids = {}
         for t in self.db_teams:
@@ -370,7 +394,7 @@ class TeamSelectorWidget(QListWidget):
                 teams.append({'name': name, 'id': db_ids[name]})
             elif name != '':
                 teams.append({'name': name})
-        if self.t_teams == teams:
+        if none_on_no_change and self.t_teams == teams:
             return None  # nothing has changed
         return teams
 
@@ -429,6 +453,7 @@ class GroupDrawWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.v_layout = QVBoxLayout()
+        self.h_layout = QHBoxLayout()
         self.setProperty('bg_img', 'true')
         self.layout = QHBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -441,11 +466,26 @@ class GroupDrawWidget(QWidget):
         self.accept_button = QPushButton('Accept')
         self.accept_button.clicked.connect(self.draw_accepted)
         self.accept_button.setEnabled(False)
-        self.v_layout.addWidget(self.accept_button)
+        self.auto_draw_button = QPushButton('Auto-Draw')
+        self.auto_draw_button.clicked.connect(self.auto_draw)
+        self.v_layout.addLayout(self.h_layout)
+        self.h_layout.addWidget(self.auto_draw_button)
+        self.h_layout.addWidget(self.accept_button)
         self.setLayout(self.v_layout)
         self.t_teams = {}
         self.g_teams = []
         self.groups = {}
+
+    # not yet considering drawing-pots
+    def auto_draw(self):
+        for group_w in self.group_stage_widget.group_widgets:
+            for i in range(group_w.table.model().rowCount()):
+                # check if slot empty and teams left to fill it
+                if group_w.table.item(i, 0).text() == '' and self.team_list_widget.count() > 0:
+                    random_index = random.randrange(self.team_list_widget.count())
+                    group_w.table.setItem(i, 0, QTableWidgetItem(self.team_list_widget.item(random_index).icon(),
+                                                        self.team_list_widget.item(random_index).text()))
+                    self.team_list_widget.remove_item_by_text(self.team_list_widget.item(random_index).text())
 
     def draw_accepted(self):
         groups = self.group_stage_widget.get_groups()
@@ -461,6 +501,7 @@ class GroupDrawWidget(QWidget):
 
     def set_groups_and_teams(self, groups, t_teams):
         self.group_stage_widget.set_groups(groups, teams_only=True)
+        widget_group_teams = self.group_stage_widget.get_team_list()
         self.t_teams = {}
         self.g_teams = []
         self.groups = {}
@@ -471,7 +512,7 @@ class GroupDrawWidget(QWidget):
         self.team_list_widget.clear()
         for t in t_teams:
             self.t_teams[t['name']] = t['id']
-            if t['id'] not in self.g_teams:
+            if t['id'] not in self.g_teams and t['name'] not in widget_group_teams:
                 item = QListWidgetItem(t['name'])
                 self.team_list_widget.addItem(item)
         if self.team_list_widget.count() == 0:
@@ -549,13 +590,97 @@ class GroupStageWidget(QWidget):
                            'teams': group, 'rounds': w.table.roundSpinBox.value()})
         return groups
 
+    def get_team_list(self):
+        teams = []
+        for w in self.group_widgets:
+            for r in range(w.table.rowCount()):
+                item = w.table.item(r, 0)
+                if item is not None and item.text() is not '':
+                    teams.append(item.text())
+        return teams
+
     def show(self):
         super().show()
         for gw in self.group_widgets:
             gw.table.recalculate_size()
 
 
-# todo: implement with retractable match-view
+class KOStageWidget(QWidget):
+    match_edited = pyqtSignal(dict)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.flow_layout = FlowLayout()
+        self.widget = QWidget(self)
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(self.widget)
+        self.scroll.setWidgetResizable(True)
+        self.widget.setProperty('bg_img', 'true')
+        self.widget.setLayout(self.flow_layout)
+        self.grid_layout = QGridLayout()
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(self.grid_layout)
+
+        self.layout().addWidget(self.scroll)
+
+    def paintEvent(self, q_paint_event):
+        opt = QStyleOption()
+        opt.initFrom(self.parent())
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
+
+    def set_stages(self, stages, editable=False):
+        for i in reversed(range(self.flow_layout.count())):
+            self.flow_layout.itemAt(i).widget().setParent(None)
+        for stage in stages:
+            for match in stages[stage]['matches']:
+                ko_widget = KOMatchWidget()
+                ko_widget.set_match(match, editable)
+                ko_widget.match_edited.connect(self.match_edited)
+                self.flow_layout.addWidget(ko_widget)
+
+
+class KOMatchWidget(QFrame):
+    match_edited = pyqtSignal(dict)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setLayout(QFormLayout())
+        self.team1label = QLabel('-')
+        self.team2label = QLabel('-')
+        self.t1_score_label = QLabel('-')
+        self.t2_score_label = QLabel('-')
+        self.e_lb = QLabel()
+        self.edit_button = QPushButton()
+        self.edit_button.setIcon(QIcon('icons/pencil.png'))
+        self.edit_button.clicked.connect(self.edit_match)
+        self.match = None
+        self.dialog = None
+        self.e_lb.hide()
+        self.edit_button.hide()
+        self.layout().addRow(self.team1label, self.t1_score_label)
+        self.layout().addRow(self.team2label, self.t2_score_label)
+        self.layout().addRow(self.e_lb, self.edit_button)
+
+    def set_match(self, match, editable=False):
+        self.match = match
+        self.team1label.setText(match['team1'])
+        self.team2label.setText(match['team2'])
+        self.t1_score_label.setText(str(match['team1_score']))
+        self.t2_score_label.setText(str(match['team2_score']))
+        if editable:
+            self.e_lb.show()
+            self.edit_button.show()
+        else:
+            self.e_lb.hide()
+            self.edit_button.hide()
+
+    def edit_match(self):
+        self.dialog = EditMatchDialog(self.match, parent=self)
+        self.dialog.match_updated.connect(self.match_edited)
+        self.dialog.show()
+
+
 class GroupWidget(QFrame):
     match_edited = pyqtSignal(dict)
 
@@ -703,6 +828,7 @@ class GroupTable(QTableWidget):
         self.total_column_width = 350
 
     def set_group(self, group, teams_only=False):
+        self.clear()
         if not teams_only:
             self.setColumnCount(5)
             self.setHorizontalHeaderLabels([group['name'], 'G', 'W', 'L', 'BD'])
@@ -1030,14 +1156,202 @@ class EditMatchDialog(QDialog):
 
 
 # todo: implement match view next to group-stage-widget
-class AllTimeTableWidget(GroupStageWidget):
-    def __init__(self, database, parent=None):
-        super().__init__(parent, False)
-        self.database = database
+class AllTimeTableWidget(QWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.table = GroupStageWidget(self)
+        self.setLayout(QGridLayout())
+        self.layout().addWidget(self.table)
+        self.layout().setAlignment(self.table, Qt.AlignHCenter)
 
-    def update_table(self):
-        all_time_table = self.database.get_all_time_table()
-        self.set_groups(all_time_table, editable=False)
+    def update_table(self, all_time_table):
+        self.table.set_groups(all_time_table, editable=False)
+
+    def paintEvent(self, q_paint_event):
+        opt = QStyleOption()
+        opt.initFrom(self.parent())
+        p = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
+
+
+class ManageTournamentWidget(QWidget):
+    final_names = {
+        2: 'Final',
+        4: 'Semi-Final',
+        8: 'Quarter-Final',
+        16: 'Round of 16',
+        32: 'Round of 32',
+        64: 'Round of 64'
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lineEdit = QLineEdit(self)
+        self.lineEdit.setText('FlunkyRock 2018')
+        self.spinBox = QSpinBox(self)
+        self.spinBox.setMinimum(4)
+        self.spinBox.valueChanged.connect(self.num_teams_changed)
+        self.teamTable = TeamSelectorWidget(self)
+
+        self.num_teams = 0
+        self.groupLabel = QLabel('Group size:')
+        self.groupComboBox = QComboBox(self)
+        self.finalLabel = QLabel('Teams in KO Round:')
+        self.finalComboBox = QComboBox(self)
+        self.maxGamesLabel = QLabel(self)
+
+        layout = QGridLayout()
+        layout.addWidget(QLabel('Tournament Name:'), 0, 0)
+        layout.addWidget(self.lineEdit, 0, 1)
+        layout.addWidget(QLabel('Number of Teams:'), 1, 0)
+        layout.addWidget(self.spinBox, 1, 1)
+        self.teamLabel = QLabel('Teams:\n\n(team names can\nalso be manually\nadded later on)')
+        self.teamLabel.setAlignment(Qt.AlignTop)
+        layout.addWidget(self.teamLabel, 2, 0)
+        layout.addWidget(self.teamTable, 2, 1)
+
+        layout.addWidget(self.groupLabel, 3, 0)
+        layout.addWidget(self.groupComboBox, 3, 1)
+        layout.addWidget(self.finalLabel, 4, 0)
+        layout.addWidget(self.finalComboBox, 4, 1)
+        layout.addWidget(QLabel('Max # of Games:'), 5, 0)
+        layout.addWidget(self.maxGamesLabel, 5, 1)
+
+        self.groupComboBox.currentTextChanged.connect(self.num_groups_changed)
+        self.finalComboBox.currentTextChanged.connect(self.estimate_games)
+
+        self.setLayout(layout)
+
+    def set_teams(self, t_teams, db_teams, tournament, group_size=None):
+
+        if tournament:
+            self.lineEdit.setText(tournament['name'])
+            self.num_teams = tournament['num_teams']
+        else:
+            self.num_teams = 16
+
+        self.spinBox.setValue(self.num_teams)
+        self.teamTable.set_teams(db_teams=db_teams, count=self.num_teams, t_teams=t_teams)
+        if group_size:
+            for i in range(self.groupComboBox.count()):
+                if self.groupComboBox.itemData(i) == group_size:
+                    self.groupComboBox.setCurrentIndex(i)
+                    break
+
+    def set_status(self, edit_tournament_name=True, manage_teams=True,
+                   edit_group_size=True, edit_finals=True):
+
+        self.lineEdit.setEnabled(edit_tournament_name)
+        self.spinBox.setEnabled(manage_teams)
+        self.teamTable.set_status(manage_teams)
+        self.groupComboBox.setEnabled(edit_group_size)
+        self.finalComboBox.setEnabled(edit_finals)
+        if manage_teams:
+            self.teamLabel.setText('Teams:\n\n(team names can\nalso be manually\nadded later on)')
+        else:
+            self.teamLabel.setText('Teams:')
+        if not edit_group_size:
+            self.groupLabel.hide()
+            self.groupComboBox.hide()
+        else:
+            self.groupLabel.show()
+            self.groupComboBox.show()
+        if not edit_finals:
+            self.finalLabel.hide()
+            self.finalComboBox.hide()
+        else:
+            self.finalLabel.show()
+            self.finalComboBox.show()
+
+    def get_data(self):
+        data = {}
+        if self.lineEdit.isEnabled():
+            data['name'] = self.lineEdit.text()
+            data['stylesheet'] = '*{background-color: rgb(161,58,139); color: rgb(255,255,255)} ' \
+                                 '*[highlighted]{color: rgb(40,154,183)}' \
+                                 '*[bg_img]{background-image: url(bg_imgs/2018.png)}' \
+                                 'QLabel, QLineEdit, ' \
+                                 'QRadioButton{background-color: rgba(255, 255, 255, 0)} ' \
+                                 '*[transp_bg="true"]{background-color: rgba(255, 255, 255, 0)}'
+        if self.teamTable.team_selection_enabled:
+            data['teams'] = self.teamTable.get_teams()
+            data['num_teams'] = self.spinBox.value()
+        if self.groupComboBox.isEnabled():
+            data['group_size'] = int(self.groupComboBox.currentData())
+        if self.finalComboBox.isEnabled():
+            data['teams_in_ko'] = int(self.finalComboBox.currentData())
+
+        return data
+
+    def num_teams_changed(self):
+        while self.spinBox.value() > self.teamTable.count():
+            self.teamTable.add_team_item()
+        while self.spinBox.value() < self.teamTable.count():
+            self.teamTable.remove_last_team_item()
+        self.teamTable.team_selected()
+
+        self.num_teams = self.spinBox.value()
+        self.groupComboBox.clear()
+        choices = self.compute_group_size_scores()
+        for choice in choices:
+            self.groupComboBox.addItem('%r (%r Groups, %r open Slots)' %
+                                       (choice[1]['size'], choice[1]['groups'], choice[1]['open_slots']),
+                                       choice[1]['size'])
+            if choice[0] == 0:
+                self.groupComboBox.setItemData(self.groupComboBox.count() - 1, QColor.green, Qt.BackgroundRole)
+        groups = int(math.floor(float(self.num_teams) / float(self.groupComboBox.currentData())))
+        self.update_final_combobox(groups)
+
+    def num_groups_changed(self):
+        if self.groupComboBox.currentData() is not None:
+            groups = int(math.ceil(float(self.num_teams) / float(self.groupComboBox.currentData())))
+            self.update_final_combobox(groups)
+
+    def update_final_combobox(self, groups):
+        self.finalComboBox.clear()
+        for i in range(2, self.num_teams + 1):
+            if (i & (i - 1)) == 0 and i >= groups:
+                self.finalComboBox.addItem('%r (%s)' % (i, self.final_names[i]), i)
+
+        self.estimate_games()
+
+    def compute_group_size_scores(self):
+        choices = []
+        for group_size in range(3, self.num_teams + 1).__reversed__():
+
+            rest = self.num_teams % group_size
+            num_groups = float(self.num_teams) / float(group_size)
+            prev_g = float(self.num_teams) / float(group_size - 1)
+            groups = math.ceil(num_groups)
+            open_slots = (groups * group_size) - self.num_teams
+
+            score = - open_slots
+            if groups > 1:
+                score -= (groups % 2) * 2
+
+            if group_size < 4:
+                score -= 4 - group_size
+            elif group_size > 5:
+                score -= group_size - 5
+
+            if num_groups < 1 or \
+                            groups == math.ceil(prev_g):
+                    # (0 < rest < (group_size / 2.0)) or \
+
+                pass
+            else:
+                choices.append((score, {'size': group_size, 'groups': groups, 'open_slots': open_slots}))
+                # print('    %s   |  %s   | %s   |  %s' % (groups, group_size,
+                #                                         open_slots, score))
+        choices = sorted(choices, key=lambda x: x[0])
+        choices.reverse()
+        return choices
+
+    def estimate_games(self):
+        if self.finalComboBox.currentData() is not None and self.groupComboBox.currentData() is not None:
+            est_games = int(math.log2(int(self.finalComboBox.currentData()))) + int(
+                self.groupComboBox.currentData()) - 1
+            self.maxGamesLabel.setText(str(est_games))
 
 #  ----------------------------------------------------------------------------
 #
@@ -1067,10 +1381,11 @@ class FilteringComboBox(QComboBox):
 
         self.lineEdit().textEdited.connect(self._proxy.setFilterFixedString)
 
+    def wheelEvent(self, event: QWheelEvent):
+        event.ignore()
+
     def on_completer_activated(self, text):
         if not text: return
         self.setCurrentIndex(self.findText(text))
         self.activated[str].emit(self.currentText())
-
-
 
