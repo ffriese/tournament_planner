@@ -103,6 +103,10 @@ class RemoteQueue(QObject):
         self.queue.extend(local_queue)
         self.save()
 
+    def append(self, single_update):
+        self.queue.append(single_update)
+        self.save()
+
     @staticmethod
     def internet_on():
         try:
@@ -457,59 +461,147 @@ class DataBaseManager(QObject):
 
                     self.db.commit()
                     self.remote_queue.extend(local_update_queue)
-                elif data['next_stage']['name'].startswith('KO_FINAL'):
+                elif data['next_stage']['name'].startswith('KO_FINAL') and data['name'] == 'KO2':
                     print('TODO: DO CRAZY FINAL STUFF')
+                    stages = self.get_tournament_ko_stages(tournament_id)
+                    # TODO: SOLVE FOR CASES WHERE WE DONT ONLY HAVE FINAL_3 AND FINAL_1
+                    final_1 = []
+                    final_1_id = None
+                    final_3 = []
+                    final_3_id = None
+
+                    self.db.open()
+                    query.prepare('SELECT id, name FROM Tournament_Stages WHERE tournament = :t_id'
+                                  ' AND name LIKE "KO_FINAL_%"')
+
+                    query.bindValue(':t_id', tournament_id)
+                    self.execute_query(query)
+                    finals = self.simple_get_multiple(query, ['id', 'name'])
+                    for final in finals:
+                        if final['name'] == 'KO_FINAL_1':
+                            final_1_id = final['id']
+                        elif final['name'] == 'KO_FINAL_3':
+                            final_3_id = final['id']
+
+                    for stage in stages:
+                        if stages[stage]['name'] == data['name']:
+                            for match in stages[stage]['matches']:
+                                print(match)
+                                winner = None
+                                loser = None
+                                if match['team1_score'] > match['team2_score']:
+                                    winner = {'name': match['team1'], 'id': match['team1_id']}
+                                    loser = {'name': match['team2'], 'id': match['team2_id']}
+                                elif match['team1_score'] < match['team2_score']:
+                                    winner = {'name': match['team2'], 'id': match['team2_id']}
+                                    loser = {'name': match['team1'], 'id': match['team1_id']}
+
+                                assert winner is not None
+                                assert loser is not None
+                                final_1.append(winner)
+                                final_3.append(loser)
+
+                    schedule = [{'team1_id': final_3[0]['id'],
+                                 'team2_id': final_3[1]['id'],
+                                 'stage': final_3_id
+                                 },
+                                {'team1_id': final_1[0]['id'],
+                                 'team2_id': final_1[1]['id'],
+                                 'stage': final_1_id
+                                 }]
+
+                    self.db.transaction()
+                    query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
+                                  'VALUES (:t1, :t2, 0, :ts_id)')
+                    query.bindValue(':t1', [QVariant(m['team1_id']) for m in schedule])
+                    query.bindValue(':t2', [QVariant(m['team2_id']) for m in schedule])
+                    query.bindValue(':ts_id', [QVariant(m['stage']) for m in schedule])
+                    self.execute_query(query, batch=True)
+
+                    query.prepare('SELECT * FROM Matches WHERE tournament_stage = :t_id')
+                    query.bindValue(':t_id', data['next_stage']['id'])
+                    self.execute_query(query)
+                    keys = ['id', 'team1', 'team2', 'status', 'tournament_stage']
+                    value_dict = self.simple_get_multiple(query, keys)
+                    local_update_queue.append(
+                        self.create_remote_update('insert', 'Matches', keys,
+                                                  [[t[key] for t in value_dict] for key in keys]
+                                                  ))
+
+                    self.db.commit()
+                    self.remote_queue.extend(local_update_queue)
 
                 elif data['next_stage']['name'].startswith('KO'):
-                    match_count = int(data['next_stage']['name'][2:3])
-                    team_count = match_count * 2
-                    groups = self.get_tournament_groups(tournament_id)
-                    self.db.open()
-                    direct_qualification = math.floor(team_count/len(groups))
-                    qualified = []
-                    pots = [[] for i in range(direct_qualification)]
+                    if data['name'] == 'GROUP':
+                        match_count = int(data['next_stage']['name'][2:3])
+                        team_count = match_count * 2
+                        groups = self.get_tournament_groups(tournament_id)
+                        self.db.open()
+                        direct_qualification = math.floor(team_count/len(groups))
+                        qualified = []
+                        pots = [[] for i in range(direct_qualification)]
 
-                    for group in groups:
-                        for q in range(direct_qualification):
-                            direct = group['teams'].pop(0)
-                            qualified.append(direct)
-                            pots[q].append(direct['name'])
-                    if len(qualified) < team_count:
-                        # fill the rest of the spots with the next best teams...
-                        left_over_teams = []
                         for group in groups:
-                            for t in group['teams']:
-                                left_over_teams.append(t['id'])
-                        team_replacement = '(%s)' % ', '.join(['%r' % t for t in left_over_teams])
-                        query.prepare(
-                            'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
-                            'COALESCE(Won, 0) as won, '
-                            'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
-                            'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
-                            'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
-                            'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
-                            'SUM(against) as Against FROM ( SELECT team1 as team, '
-                            'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
-                            'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
-                            ' FROM Matches WHERE tournament_stage = :stage_id '
-                            'UNION ALL SELECT team2 as team, '
-                            'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
-                            'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
-                            'FROM Matches WHERE tournament_stage = :stage_id '
-                            ') t '
-                            'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
-                            '%s'
-                            ' ORDER By won DESC, diff DESC, score DESC, conceded' % team_replacement)
-                        query.bindValue(':stage_id', data['current_stage_id'])
+                            for q in range(direct_qualification):
+                                direct = group['teams'].pop(0)
+                                qualified.append(direct)
+                                pots[q].append(direct['name'])
+                        if len(qualified) < team_count:
+                            # fill the rest of the spots with the next best teams...
+                            left_over_teams = []
+                            for group in groups:
+                                for t in group['teams']:
+                                    left_over_teams.append(t['id'])
+                            team_replacement = '(%s)' % ', '.join(['%r' % t for t in left_over_teams])
+                            query.prepare(
+                                'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
+                                'COALESCE(Won, 0) as won, '
+                                'COALESCE(Lost, 0) as lost, COALESCE(Bierferenz, 0) as diff, '
+                                'COALESCE(Score, 0) as score, COALESCE(Against, 0) as conceded '
+                                'FROM Teams LEFT JOIN (SELECT team, SUM(Win)+SUM(Loss) as Games, SUM(Win) As Won, '
+                                'SUM(Loss) as Lost, Sum(score)-Sum(against) as Bierferenz, SUM(score) as Score , '
+                                'SUM(against) as Against FROM ( SELECT team1 as team, '
+                                'CASE WHEN team1_score > team2_score THEN 1 ELSE 0 END as Win, team2_score as against, '
+                                'CASE WHEN team1_score < team2_score THEN 1 ELSE 0 END as Loss, team1_score as score'
+                                ' FROM Matches WHERE tournament_stage = :stage_id '
+                                'UNION ALL SELECT team2 as team, '
+                                'CASE WHEN team2_score > team1_score THEN 1 ELSE 0 END as Win, team1_score as against, '
+                                'CASE WHEN team2_score < team1_score THEN 1 ELSE 0 END as Loss, team2_score as score '
+                                'FROM Matches WHERE tournament_stage = :stage_id '
+                                ') t '
+                                'GROUP BY team) as g_table ON Teams.id=g_table.team WHERE Teams.id in '
+                                '%s'
+                                ' ORDER By won DESC, diff DESC, score DESC, conceded' % team_replacement)
+                            query.bindValue(':stage_id', data['current_stage_id'])
 
-                        self.execute_query(query)
-                        table = self.simple_get_multiple(query, ['id', 'name', 'won', 'diff'])
-                        for i in range(team_count-len(qualified)):
-                            qualified.append(table.pop(0))
+                            self.execute_query(query)
+                            table = self.simple_get_multiple(query, ['id', 'name', 'won', 'diff'])
+                            for i in range(team_count-len(qualified)):
+                                qualified.append(table.pop(0))
 
-                    print('qualified:', [t['name'] for t in qualified])
-                    # todo: use pots maybe?
-                    shuffle(qualified)
+                        print('qualified:', [t['name'] for t in qualified])
+                        # todo: use pots maybe?
+                        shuffle(qualified)
+
+                    else:
+                        stages = self.get_tournament_ko_stages(tournament_id)
+                        qualified = []
+                        print(stages.keys())
+                        for stage in stages:
+                            print(stages[stage].keys())
+                            if stages[stage]['name'] == data['name']:
+                                for match in stages[stage]['matches']:
+                                    print(match)
+                                    winner = None
+                                    if match['team1_score'] > match['team2_score']:
+                                        winner = {'name': match['team1'], 'id': match['team1_id']}
+                                    elif match['team1_score'] > match['team2_score']:
+                                        winner = {'name': match['team2'], 'id': match['team2_id']}
+
+                                    assert winner is not None
+                                    qualified.append(winner)
+                        self.db.open()
+
                     schedule = []
                     while len(qualified) > 0:
                         teams = [qualified.pop(0), qualified.pop(0)]
@@ -537,6 +629,8 @@ class DataBaseManager(QObject):
 
                     self.db.commit()
                     self.remote_queue.extend(local_update_queue)
+                else:
+                    pass
 
             elif data['status'] == TournamentStageStatus.INITIALIZED:
                 # TODO: REGENERATE, FOR THIS WE WILL NEED TO AMEND THE CURRENT_STAGE-INFORMATION

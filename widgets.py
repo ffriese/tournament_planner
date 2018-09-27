@@ -100,13 +100,14 @@ class TournamentWidget(QWidget):
         self.setLayout(self.layout)
         self.toolbar = QWidget()
         self.toolbar.setLayout(QHBoxLayout())
-        self.toolbar.setMinimumHeight(25)
-        self.toolbar.setMaximumHeight(25)
+        self.toolbar.setMinimumHeight(35)
+        self.toolbar.setMaximumHeight(35)
         self.nameLabel = QLabel()
-        self.nameLabel.setMaximumHeight(25)
+        self.nameLabel.setMaximumHeight(35)
         self.main_page_button = QToolButton()
-        self.main_page_button.setFixedSize(20, 20)
-        self.main_page_button.setIcon(QIcon('icons/arrow_left.png'))
+        self.main_page_button.setFixedSize(35, 35)
+        self.main_page_button.setIconSize(QSize(30, 30))
+        self.main_page_button.setIcon(QIcon('icons/back.png'))
         self.main_page_button.clicked.connect(self.show_main_page)
         self.toolbar.layout().setContentsMargins(5, 0, 0, 0)
         self.toolbar.layout().addWidget(self.main_page_button)
@@ -127,6 +128,7 @@ class TournamentWidget(QWidget):
         self.widgets['draw_groups'].groups_drawn.connect(self.update_tournament_groups)
         self.widgets['generate_matches'].match_generation_requested.connect(self.generate_matches)
         self.widgets['groups'].match_edited.connect(self.update_match)
+        self.widgets['ko_stage'].match_edited.connect(self.update_match)
         self.main_widget.button_clicked.connect(self.show_widget)
         self.show_main_page()
 
@@ -156,13 +158,13 @@ class TournamentWidget(QWidget):
         self.t_teams = t_teams
         if groups is not None:
             try:
-                editable = status['name'] == 'GROUP'
+                g_editable = status['name'] == 'GROUP'
             except KeyError:
-                editable = False
+                g_editable = False
             self.widgets['tournament_settings'].set_teams(t_teams=t_teams, db_teams=db_teams,
                                                           group_size=groups[0]['size'] if len(groups) > 0 else None,
                                                           tournament=tournament, status=status)
-            self.widgets['groups'].set_groups(groups, editable=editable)
+            self.widgets['groups'].set_groups(groups, editable=g_editable)
             self.widgets['draw_groups'].set_groups_and_teams(groups, t_teams)
             self.widgets['ko_stage'].set_stages(ko_stages, editable=True)
         self.widgets['generate_matches'].set_stage(status)
@@ -250,7 +252,8 @@ class TournamentMainWidget(QWidget):
             'generate_matches': {
                 'bt': QPushButton('Generate next Matches', self),
                 'icon': QIcon('icons/application_form.png'),
-                'enabled': lambda stage, name, status: status == TournamentStageStatus.COMPLETE and name != 'KO_FINAL_1'
+                'enabled': lambda stage, name, status: status == TournamentStageStatus.COMPLETE
+                                                       and not name.startswith('KO_FINAL_')
                 # show if current stage is complete, but not the final stage
                              },
             'ko_stage': {
@@ -620,6 +623,7 @@ class KOStageWidget(QWidget):
         self.grid_layout = QGridLayout()
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self.grid_layout)
+        self.stage_containers = []
 
         self.layout().addWidget(self.scroll)
 
@@ -629,56 +633,53 @@ class KOStageWidget(QWidget):
         p = QPainter(self)
         self.style().drawPrimitive(QStyle.PE_Widget,  opt,  p, self)
 
+    @staticmethod
+    def get_stage_name(stage_name):
+        stage_name = stage_name.replace('KO16', 'Round of 32')
+        stage_name = stage_name.replace('KO8', 'Round of 16')
+        stage_name = stage_name.replace('KO4', 'Quarterfinal')
+        stage_name = stage_name.replace('KO2', 'Semifinal')
+        stage_name = stage_name.replace('KO_FINAL_3', '3rd Place Match')
+        stage_name = stage_name.replace('KO_FINAL_1', 'Final')
+        return stage_name
+
     def set_stages(self, stages, editable=False):
-        for i in reversed(range(self.flow_layout.count())):
-            self.flow_layout.itemAt(i).widget().setParent(None)
+        if len(stages) != self.flow_layout.count():
+            for i in reversed(range(self.flow_layout.count())):
+                self.flow_layout.itemAt(i).widget().setParent(None)
+            self.stage_containers.clear()
+            for stage in stages:
+                sw = KOStageContainerWidget(self)
+                sw.match_edited.connect(self.match_edited)
+                self.stage_containers.append(sw)
+                self.flow_layout.addWidget(sw)
+        i = 0
         for stage in stages:
-            for match in stages[stage]['matches']:
-                ko_widget = KOMatchWidget()
-                ko_widget.set_match(match, editable)
-                ko_widget.match_edited.connect(self.match_edited)
-                self.flow_layout.addWidget(ko_widget)
+            group = {'matches': stages[stage]['matches']}
+            self.stage_containers[i].set_group(group, editable=editable)
+            self.stage_containers[i].set_title(self.get_stage_name(stages[stage]['name']))
+            i += 1
 
 
-class KOMatchWidget(QFrame):
+class KOStageContainerWidget(QFrame):
     match_edited = pyqtSignal(dict)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setLayout(QFormLayout())
-        self.team1label = QLabel('-')
-        self.team2label = QLabel('-')
-        self.t1_score_label = QLabel('-')
-        self.t2_score_label = QLabel('-')
-        self.e_lb = QLabel()
-        self.edit_button = QPushButton()
-        self.edit_button.setIcon(QIcon('icons/pencil.png'))
-        self.edit_button.clicked.connect(self.edit_match)
-        self.match = None
-        self.dialog = None
-        self.e_lb.hide()
-        self.edit_button.hide()
-        self.layout().addRow(self.team1label, self.t1_score_label)
-        self.layout().addRow(self.team2label, self.t2_score_label)
-        self.layout().addRow(self.e_lb, self.edit_button)
+        self.setLayout(QVBoxLayout())
+        self.setFrameShape(QFrame.Panel)
+        self.setFrameShadow(QFrame.Sunken)
+        self.stage_title_label = QLabel(self)
+        self.match_table = MatchTable(self)
+        self.match_table.match_edited.connect(self.match_edited)
+        self.layout().addWidget(self.stage_title_label)
+        self.layout().addWidget(self.match_table)
 
-    def set_match(self, match, editable=False):
-        self.match = match
-        self.team1label.setText(match['team1'])
-        self.team2label.setText(match['team2'])
-        self.t1_score_label.setText(str(match['team1_score']))
-        self.t2_score_label.setText(str(match['team2_score']))
-        if editable:
-            self.e_lb.show()
-            self.edit_button.show()
-        else:
-            self.e_lb.hide()
-            self.edit_button.hide()
+    def set_group(self, group, editable=False):
+        self.match_table.set_group(group, editable)
 
-    def edit_match(self):
-        self.dialog = EditMatchDialog(self.match, parent=self)
-        self.dialog.match_updated.connect(self.match_edited)
-        self.dialog.show()
+    def set_title(self, title):
+        self.stage_title_label.setText(title)
 
 
 class GroupWidget(QFrame):
@@ -750,6 +751,7 @@ class MatchTable(QTableWidget):
         matches = group['matches'] if group['matches'] is not None else []
         self.clear()
 
+        #print('update', matches)
         self.setColumnCount(7 if editable else 6)
         self.setRowCount(len(matches))
         self.setColumnWidth(0, 140 if editable else 150)
