@@ -79,6 +79,7 @@ class RemoteQueue(QObject):
         self.file_name = 'remote_queue'
         remote_sync = True
         self.mutex = Lock()
+        self.thread = None
         try:
             RemoteConnectionManager()
             self.ONLINE_MODE = remote_sync
@@ -117,13 +118,15 @@ class RemoteQueue(QObject):
         except URLError as err:
             return False
 
-    def execute_updates(self):
-        t = Thread(target=self.execute_updates)
-        t.start()
+    # def execute_updates(self):
+    #     self.mutex.acquire()
+    #     self.thread = Thread(target=self.execute_updates)
+    #     self.thread.start()
+    #     self.mutex.release()
 
-    def execute(self):
+    def execute_updates(self):
         success = True
-        self.mutex.acquire()
+        # self.mutex.acquire()
         if self.ONLINE_MODE and self.internet_on():
             self.sync_status.emit({'internet': True, 'queue_size': self.queue_size()})
 
@@ -143,7 +146,7 @@ class RemoteQueue(QObject):
 
         else:
             self.sync_status.emit({'internet': False, 'queue_size': self.queue_size()})
-        self.mutex.release()
+        # self.mutex.release()
 
 
 class DataBaseManager(QObject):
