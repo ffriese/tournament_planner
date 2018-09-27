@@ -3,6 +3,7 @@ import pickle
 from collections import OrderedDict
 from enum import Enum
 from random import shuffle
+from threading import Thread
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -76,7 +77,7 @@ class RemoteQueue(QObject):
         super().__init__()
         self.queue = []
         self.file_name = 'remote_queue'
-        remote_sync = False
+        remote_sync = True
         try:
             RemoteConnectionManager()
             self.ONLINE_MODE = remote_sync
@@ -116,13 +117,16 @@ class RemoteQueue(QObject):
             return False
 
     def execute_updates(self):
+        t = Thread(target=self.execute_updates)
+        t.start()
+
+    def execute(self):
         success = True
-        queue_size = len(self.queue)
 
         if self.ONLINE_MODE and self.internet_on():
             self.sync_status.emit({'internet': True, 'queue_size': self.queue_size()})
 
-            while queue_size > 0 and success:
+            while self.queue_size() > 0 and success:
                 update = self.queue[0]
                 print('remote', update['action'], ' ==> ', update)
                 if self.ONLINE_MODE:
@@ -137,7 +141,7 @@ class RemoteQueue(QObject):
                     self.sync_status.emit({'internet': self.internet_on(), 'queue_size': self.queue_size()})
 
         else:
-            self.sync_status.emit({'internet': False, 'queue_size': queue_size})
+            self.sync_status.emit({'internet': False, 'queue_size': self.queue_size()})
 
 
 class DataBaseManager(QObject):
