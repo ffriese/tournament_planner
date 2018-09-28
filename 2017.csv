@@ -1,7 +1,7 @@
 Ralles Raketen;Team Süffig;1;0;2017;A
-Ralles Raketen;Team Süffig;4;0;2017;A
+Team Süffig;Ralles Raketen;0;4;2017;A
 Reinholds Jungs;Einhörner;4;0;2017;B
-Reinholds Jungs;Einhörner;4;0;2017;B
+Einhörner;Reinholds Jungs;0;4;2017;B
 UPB Rot;Bier-Maschine;4;0;2017;C
 UPB Rot;Bojack Horseman AG;4;0;2017;C
 Bojack Horseman AG;Bier-Maschine;0;3;2017;C
@@ -19,7 +19,7 @@ Die flunktastischen 4;Zweihörner;5;0;2017;G
 Die Bierfreunde Siegen;Mats Faptime;0;4;2017;H
 Mats Faptime;Die Bierfreunde Siegen;0;1;2017;H
 Die Stabilen;UPB Blau;0;4;2017;I
-Die Stabilen;UPB Blau;0;4;2017;I
+UPB Blau;Die Stabilen;4;0;2017;I
 Arminia Biergefällt;UPB Gelb;0;2;2017;J
 Wildcard;UPB Gelb;4;0;2017;J
 Wildcard;Arminia Biergefällt;4;0;2017;J
@@ -30,9 +30,9 @@ Flunkengötter;Dynamo Diakonia;1;0;2017;L
 Flunkengötter;Simon and Garflunkel;4;0;2017;L
 Dynamo Diakonia;Simon and Garflunkel;4;0;2017;L
 KSBier;Flunky Friday;0;4;2017;M
-KSBier;Flunky Friday;0;4;2017;M
+Flunky Friday;KSBier;4;0;2017;M
 Team Edinger;The Flunk, the whole Flunk and nothing but the Flunk!;2;0;2017;N
-Team Edinger;The Flunk, the whole Flunk and nothing but the Flunk!;4;0;2017;N
+The Flunk, the whole Flunk and nothing but the Flunk!;Team Edinger;0;4;2017;N
 Reinholds Jungs;Die flunktastischen 4;4;0;2017;KO8
 Team Klopapier;UPB Blau;4;0;2017;KO8
 Team Edinger;Flunkengötter;0;5;2017;KO8
