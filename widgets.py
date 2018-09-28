@@ -11,7 +11,7 @@ from PyQt5.QtGui import QIcon, QPixmap, QColor, QPainter, QDropEvent, QStandardI
 from PyQt5.QtWidgets import QGridLayout, QScrollArea, QWidget, QTableWidgetItem, QPushButton, QToolButton, \
     QLabel, QHBoxLayout, QVBoxLayout, QHeaderView, QTableWidget, QListWidget, QListWidgetItem, QComboBox, \
     QCompleter, QStyleOption, QStyle, QAbstractItemView, QSpinBox, QFrame, QDialog, QFormLayout, \
-    QRadioButton, QButtonGroup, QSplitter, QLineEdit
+    QRadioButton, QButtonGroup, QSplitter, QLineEdit, QMainWindow
 
 from layout import FlowLayout
 from tools import TournamentStageStatus
@@ -130,6 +130,10 @@ class TournamentWidget(QWidget):
         self.widgets['groups'].match_edited.connect(self.update_match)
         self.widgets['ko_stage'].match_edited.connect(self.update_match)
         self.main_widget.button_clicked.connect(self.show_widget)
+
+        self.display_window = DisplayWindow(self)
+        self.display_window.show()
+
         self.show_main_page()
 
     def show_main_page(self):
@@ -166,7 +170,10 @@ class TournamentWidget(QWidget):
                                                           tournament=tournament, status=status)
             self.widgets['groups'].set_groups(groups, editable=g_editable)
             self.widgets['draw_groups'].set_groups_and_teams(groups, t_teams)
-            self.widgets['ko_stage'].set_stages(ko_stages, editable=True)
+            self.widgets['ko_stage'].set_stages(ko_stages, status)
+
+            self.display_window.set_data(groups, ko_stages, status)
+
         self.widgets['generate_matches'].set_stage(status)
         if status is not None:
             self.main_widget.set_status(status)
@@ -643,7 +650,7 @@ class KOStageWidget(QWidget):
         stage_name = stage_name.replace('KO_FINAL_1', 'Final')
         return stage_name
 
-    def set_stages(self, stages, editable=False):
+    def set_stages(self, stages, status, editable=None):
         if len(stages) != self.flow_layout.count():
             for i in reversed(range(self.flow_layout.count())):
                 self.flow_layout.itemAt(i).widget().setParent(None)
@@ -656,7 +663,13 @@ class KOStageWidget(QWidget):
         i = 0
         for stage in stages:
             group = {'matches': stages[stage]['matches']}
-            self.stage_containers[i].set_group(group, editable=editable)
+            can_edit = status['current_stage_id'] == stages[stage]['tournament_stage'] or \
+                (status['current_stage_id'] == (stages[stage]['tournament_stage'] + 1) and
+                 status['name'] == 'KO_FINAL_1') or \
+                       (status['current_stage_id'] == (stages[stage]['tournament_stage'] - 1) and
+                 status['name'] == 'KO_FINAL_3') if editable is None else editable
+
+            self.stage_containers[i].set_group(group, editable=can_edit)
             self.stage_containers[i].set_title(self.get_stage_name(stages[stage]['name']))
             i += 1
 
@@ -1354,6 +1367,38 @@ class ManageTournamentWidget(QWidget):
             est_games = int(math.log2(int(self.finalComboBox.currentData()))) + int(
                 self.groupComboBox.currentData()) - 1
             self.maxGamesLabel.setText(str(est_games))
+
+
+class DisplayWindow(QMainWindow):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.resize(800, 600)
+        self.setWindowTitle('DisplayWindow')
+        self.group_stage_widget = GroupStageWidget(self)
+        self.ko_stage_widget = KOStageWidget(self)
+        self.setCentralWidget(self.group_stage_widget)
+        self.ko_stage_widget.hide()
+
+    def set_data(self, groups, ko_stages, status):
+        self.group_stage_widget.set_groups(groups, teams_only=False, editable=False)
+        self.ko_stage_widget.set_stages(ko_stages, status, editable=False)
+        if status['name'].startswith('KO'):
+            self.switch_to_ko()
+        elif status['name'] == 'GROUP':
+            self.switch_to_group()
+
+    def switch_to_ko(self):
+        self.centralWidget().setParent(None)
+        self.group_stage_widget.hide()
+        self.setCentralWidget(self.ko_stage_widget)
+        self.ko_stage_widget.show()
+
+    def switch_to_group(self):
+        self.centralWidget().setParent(None)
+        self.ko_stage_widget.hide()
+        self.setCentralWidget(self.group_stage_widget)
+        self.group_stage_widget.show()
+
 
 #  ----------------------------------------------------------------------------
 #

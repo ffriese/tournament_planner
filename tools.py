@@ -118,15 +118,13 @@ class RemoteQueue(QObject):
         except URLError as err:
             return False
 
-    # def execute_updates(self):
-    #     self.mutex.acquire()
-    #     self.thread = Thread(target=self.execute_updates)
-    #     self.thread.start()
-    #     self.mutex.release()
-
     def execute_updates(self):
+        self.mutex.acquire()
+        self.thread = Thread(target=self.execute)
+        self.thread.start()
+
+    def execute(self):
         success = True
-        # self.mutex.acquire()
         if self.ONLINE_MODE and self.internet_on():
             self.sync_status.emit({'internet': True, 'queue_size': self.queue_size()})
 
@@ -146,7 +144,7 @@ class RemoteQueue(QObject):
 
         else:
             self.sync_status.emit({'internet': False, 'queue_size': self.queue_size()})
-        # self.mutex.release()
+        self.mutex.release()
 
 
 class DataBaseManager(QObject):
@@ -414,8 +412,6 @@ class DataBaseManager(QObject):
         local_update_queue = []
         try:
             query = QSqlQuery()
-
-            print('db-open:', self.db.isOpen())
             if data['status'] == TournamentStageStatus.COMPLETE:
                 if data['next_stage'] is None:
                     raise AssertionError('TOURNAMENT COMPLETE, THIS SHOULD NEVER HAPPEN ANYHOW')
@@ -448,7 +444,6 @@ class DataBaseManager(QObject):
                                         teams = (m[0], m[1]) if round % 2 else (m[1], m[0])
                                         schedule.append({'team1_id': teams[0]['id'],
                                                          'team2_id': teams[1]['id']})
-                    print(schedule)
 
                     self.db.transaction()
                     query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
@@ -470,75 +465,80 @@ class DataBaseManager(QObject):
 
                     self.db.commit()
                     self.remote_queue.extend(local_update_queue)
-                elif data['next_stage']['name'].startswith('KO_FINAL') and data['name'] == 'KO2':
-                    print('TODO: DO CRAZY FINAL STUFF')
-                    stages = self.get_tournament_ko_stages(tournament_id)
-                    # TODO: SOLVE FOR CASES WHERE WE DONT ONLY HAVE FINAL_3 AND FINAL_1
-                    final_1 = []
-                    final_1_id = None
-                    final_3 = []
-                    final_3_id = None
+                elif data['next_stage']['name'].startswith('KO_FINAL'):
+                    if data['name'] == 'KO2':
+                        stages = self.get_tournament_ko_stages(tournament_id)
+                        # TODO: SOLVE FOR CASES WHERE WE DON'T ONLY HAVE FINAL_3 AND FINAL_1
+                        final_1 = []
+                        final_1_id = None
+                        final_3 = []
+                        final_3_id = None
 
-                    self.db.open()
-                    query.prepare('SELECT id, name FROM Tournament_Stages WHERE tournament = :t_id'
-                                  ' AND name LIKE "KO_FINAL_%"')
+                        self.db.open()
+                        query.prepare('SELECT id, name FROM Tournament_Stages WHERE tournament = :t_id'
+                                      ' AND name LIKE "KO_FINAL_%"')
 
-                    query.bindValue(':t_id', tournament_id)
-                    self.execute_query(query)
-                    finals = self.simple_get_multiple(query, ['id', 'name'])
-                    for final in finals:
-                        if final['name'] == 'KO_FINAL_1':
-                            final_1_id = final['id']
-                        elif final['name'] == 'KO_FINAL_3':
-                            final_3_id = final['id']
+                        query.bindValue(':t_id', tournament_id)
+                        self.execute_query(query)
+                        finals = self.simple_get_multiple(query, ['id', 'name'])
+                        for final in finals:
+                            if final['name'] == 'KO_FINAL_1':
+                                final_1_id = final['id']
+                            elif final['name'] == 'KO_FINAL_3':
+                                final_3_id = final['id']
 
-                    for stage in stages:
-                        if stages[stage]['name'] == data['name']:
-                            for match in stages[stage]['matches']:
-                                print(match)
-                                winner = None
-                                loser = None
-                                if match['team1_score'] > match['team2_score']:
-                                    winner = {'name': match['team1'], 'id': match['team1_id']}
-                                    loser = {'name': match['team2'], 'id': match['team2_id']}
-                                elif match['team1_score'] < match['team2_score']:
-                                    winner = {'name': match['team2'], 'id': match['team2_id']}
-                                    loser = {'name': match['team1'], 'id': match['team1_id']}
+                        for stage in stages:
+                            if stages[stage]['name'] == data['name']:
+                                for match in stages[stage]['matches']:
+                                    print(match)
+                                    winner = None
+                                    loser = None
+                                    if match['team1_score'] > match['team2_score']:
+                                        winner = {'name': match['team1'], 'id': match['team1_id']}
+                                        loser = {'name': match['team2'], 'id': match['team2_id']}
+                                    elif match['team1_score'] < match['team2_score']:
+                                        winner = {'name': match['team2'], 'id': match['team2_id']}
+                                        loser = {'name': match['team1'], 'id': match['team1_id']}
 
-                                assert winner is not None
-                                assert loser is not None
-                                final_1.append(winner)
-                                final_3.append(loser)
+                                    assert winner is not None
+                                    assert loser is not None
+                                    final_1.append(winner)
+                                    final_3.append(loser)
 
-                    schedule = [{'team1_id': final_3[0]['id'],
-                                 'team2_id': final_3[1]['id'],
-                                 'stage': final_3_id
-                                 },
-                                {'team1_id': final_1[0]['id'],
-                                 'team2_id': final_1[1]['id'],
-                                 'stage': final_1_id
-                                 }]
+                        schedule = [{'team1_id': final_3[0]['id'],
+                                     'team2_id': final_3[1]['id'],
+                                     'stage': final_3_id
+                                     },
+                                    {'team1_id': final_1[0]['id'],
+                                     'team2_id': final_1[1]['id'],
+                                     'stage': final_1_id
+                                     }]
 
-                    self.db.transaction()
-                    query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
-                                  'VALUES (:t1, :t2, 0, :ts_id)')
-                    query.bindValue(':t1', [QVariant(m['team1_id']) for m in schedule])
-                    query.bindValue(':t2', [QVariant(m['team2_id']) for m in schedule])
-                    query.bindValue(':ts_id', [QVariant(m['stage']) for m in schedule])
-                    self.execute_query(query, batch=True)
+                        self.db.transaction()
+                        query.prepare('INSERT INTO Matches(team1, team2, status, tournament_stage) '
+                                      'VALUES (:t1, :t2, 0, :ts_id)')
+                        query.bindValue(':t1', [QVariant(m['team1_id']) for m in schedule])
+                        query.bindValue(':t2', [QVariant(m['team2_id']) for m in schedule])
+                        query.bindValue(':ts_id', [QVariant(m['stage']) for m in schedule])
+                        self.execute_query(query, batch=True)
 
-                    query.prepare('SELECT * FROM Matches WHERE tournament_stage = :t_id')
-                    query.bindValue(':t_id', data['next_stage']['id'])
-                    self.execute_query(query)
-                    keys = ['id', 'team1', 'team2', 'status', 'tournament_stage']
-                    value_dict = self.simple_get_multiple(query, keys)
-                    local_update_queue.append(
-                        self.create_remote_update('insert', 'Matches', keys,
-                                                  [[t[key] for t in value_dict] for key in keys]
-                                                  ))
+                        query.prepare('SELECT * FROM Matches WHERE tournament_stage IN (%s)'
+                                      % ', '.join([str(m['stage']) for m in schedule]))
+                        query.bindValue(':t_id', data['next_stage']['id'])
+                        self.execute_query(query)
+                        keys = ['id', 'team1', 'team2', 'status', 'tournament_stage']
+                        value_dict = self.simple_get_multiple(query, keys)
+                        local_update_queue.append(
+                            self.create_remote_update('insert', 'Matches', keys,
+                                                      [[t[key] for t in value_dict] for key in keys]
+                                                      ))
 
-                    self.db.commit()
-                    self.remote_queue.extend(local_update_queue)
+                        self.db.commit()
+                        self.remote_queue.extend(local_update_queue)
+                    elif data['name'] == 'GROUP':
+                        print('TODO: DO CRAZY GROUP-STRAIGHT-TO-FINAL STUFF')
+                    else:
+                        print('THIS IS A WEIRD STATE?', data)
 
                 elif data['next_stage']['name'].startswith('KO'):
                     if data['name'] == 'GROUP':
@@ -604,7 +604,7 @@ class DataBaseManager(QObject):
                                     winner = None
                                     if match['team1_score'] > match['team2_score']:
                                         winner = {'name': match['team1'], 'id': match['team1_id']}
-                                    elif match['team1_score'] > match['team2_score']:
+                                    elif match['team1_score'] < match['team2_score']:
                                         winner = {'name': match['team2'], 'id': match['team2_id']}
 
                                     assert winner is not None
@@ -1048,6 +1048,7 @@ class DataBaseManager(QObject):
                     stages[m['tournament_stage']] = {}
                     stages[m['tournament_stage']]['name'] = m['stage_name']
                     stages[m['tournament_stage']]['id'] = m['id']
+                    stages[m['tournament_stage']]['tournament_stage'] = m['tournament_stage']
                     stages[m['tournament_stage']]['matches'] = []
                 stages[m['tournament_stage']]['matches'].append(m)
 
@@ -1144,8 +1145,6 @@ class DataBaseManager(QObject):
 
                 direct_comp_query = QSqlQuery()
                 for conflict in conflicts:
-                    print('conflict in group %s: %r, %r' % (query.record().value('name'),
-                                                            conflict, conflicts[conflict]))
                     team_replacement = '(%s)' % ','.join([':t%r' % t for t in conflicts[conflict]])
                     direct_comp_query.prepare(
                         'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
