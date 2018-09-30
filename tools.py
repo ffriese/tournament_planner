@@ -115,7 +115,7 @@ class RemoteQueue(QObject):
         try:
             urlopen('http://flunkyrock.de', timeout=2)
             return True
-        except URLError as err:
+        except (URLError, TimeoutError) as err:
             return False
 
     def execute_updates(self):
@@ -559,9 +559,11 @@ class DataBaseManager(QObject):
                             # fill the rest of the spots with the next best teams...
                             left_over_teams = []
                             for group in groups:
-                                for t in group['teams']:
-                                    left_over_teams.append(t['id'])
-                            team_replacement = '(%s)' % ', '.join(['%r' % t for t in left_over_teams])
+                                left_over_teams.append(group['teams'].pop(0))
+                                #for t in group['teams']:
+                                #    left_over_teams.append(t['id'])
+                            print('drawing best from the %r. ranked of each group: %r' % (direct_qualification+1, left_over_teams))
+                            team_replacement = '(%s)' % ', '.join(['%r' % t['id'] for t in left_over_teams])
                             query.prepare(
                                 'SELECT id as id, Teams.name as name, COALESCE(Games, 0) as games, '
                                 'COALESCE(Won, 0) as won, '
@@ -1098,7 +1100,7 @@ class DataBaseManager(QObject):
                         ' join Teams as T1 on Matches.team1 = T1.id'
                         ' join Teams as T2 on Matches.team2 = T2.id '
                         'WHERE tournament_stage = :stage_id and T1.id in '
-                        '(SELECT team FROM Group_Teams WHERE group_id = :g_id)')
+                        '(SELECT team FROM Group_Teams WHERE group_id = :g_id) Order By Matches.id')
             self.execute_query(query)
             stage_id = self.simple_get(query, 'id')
 

@@ -664,10 +664,10 @@ class KOStageWidget(QWidget):
         for stage in stages:
             group = {'matches': stages[stage]['matches']}
             can_edit = status['current_stage_id'] == stages[stage]['tournament_stage'] or \
-                (status['current_stage_id'] == (stages[stage]['tournament_stage'] + 1) and
-                 status['name'] == 'KO_FINAL_1') or \
+                       (status['current_stage_id'] == (stages[stage]['tournament_stage'] + 1) and
+                        status['name'] == 'KO_FINAL_1') or \
                        (status['current_stage_id'] == (stages[stage]['tournament_stage'] - 1) and
-                 status['name'] == 'KO_FINAL_3') if editable is None else editable
+                        status['name'] == 'KO_FINAL_3') if editable is None else editable
 
             self.stage_containers[i].set_group(group, editable=can_edit)
             self.stage_containers[i].set_title(self.get_stage_name(stages[stage]['name']))
@@ -1247,10 +1247,12 @@ class ManageTournamentWidget(QWidget):
 
         self.spinBox.setValue(self.num_teams)
         self.teamTable.set_teams(db_teams=db_teams, count=self.num_teams, t_teams=t_teams)
+        print('searching for group_size', group_size)
         if group_size:
             for i in range(self.groupComboBox.count()):
                 if self.groupComboBox.itemData(i) == group_size:
                     self.groupComboBox.setCurrentIndex(i)
+                    print('found', self.groupComboBox.itemText(i))
                     break
 
     def set_status(self, edit_tournament_name=True, manage_teams=True,
